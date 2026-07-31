@@ -1,6 +1,6 @@
 /**
  * @file rccar_motor.h
- * @brief MCPWM 4휠 + 포탑 (스텁)
+ * @brief MCPWM 4휠 + 포탑 (DRV8833 x3)
  */
 #ifndef RCCAR_MOTOR_H
 #define RCCAR_MOTOR_H
@@ -11,10 +11,33 @@
 extern "C" {
 #endif
 
+/**
+ * @brief MCPWM 모터 드라이버 초기화 (group0: FL/FR/RL, group1: RR/TURRET)
+ * @return ESP_OK on success
+ */
 esp_err_t rccar_motor_init(void);
+
+/**
+ * @brief 4휠 속도 타깃 설정 (10ms 램프)
+ * @param fl,fr,rl,rr -512 .. 511 (양수: IN1 PWM, 음수: IN2 PWM)
+ */
 void rccar_motor_wheel_set(int fl, int fr, int rl, int rr);
+
+/**
+ * @brief 4휠 속도 즉시 설정 (램프 우회)
+ * @param fl,fr,rl,rr -512 .. 511
+ */
 void rccar_motor_wheel_set_immediate(int fl, int fr, int rl, int rr);
+
+/**
+ * @brief 포탑 속도 즉시 설정 (램프 없음)
+ * @param speed -512 .. 511
+ */
 void rccar_motor_turret_set(int speed);
+
+/**
+ * @brief 전 모터 즉시 정지 (휠 + 포탑)
+ */
 void rccar_motor_all_stop(void);
 
 #ifdef __cplusplus
