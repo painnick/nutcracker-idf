@@ -2,6 +2,9 @@
 sdkconfig.old
 sdkconfig
 
+# agent / SDD scratch
+.superpowers/
+
 # misc
 .pioenvs
 .clang_complete
