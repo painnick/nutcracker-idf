@@ -67,6 +67,8 @@ static QueueHandle_t input_queue = NULL;
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
 static volatile bool s_radar_armed = false;
+/* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
+static volatile bool s_connected = false;
 
 static void waiting_idle_cb(void *arg) {
     (void)arg;
@@ -109,6 +111,18 @@ static void input_process_task(void *arg) {
         BaseType_t got = xQueueReceive(input_queue, &evt, pdMS_TO_TICKS(INPUT_POLL_MS));
         int64_t now_ms = esp_timer_get_time() / 1000;
 
+        /* Disconnect / not ready: never re-drive from stale queue samples */
+        if (!s_connected) {
+            last_input_ms = 0;
+            prev_buttons = 0;
+            select_start_pressed_at = 0;
+            if (!failsafe_active) {
+                failsafe_stop();
+                failsafe_active = true;
+            }
+            continue;
+        }
+
         if (got == pdTRUE) {
             last_input_ms = evt.timestamp_ms;
         }
@@ -124,6 +138,16 @@ static void input_process_task(void *arg) {
 
         if (got != pdTRUE)
             continue;
+
+        /* Re-check after receive: disconnect may race with queue read */
+        if (!s_connected) {
+            last_input_ms = 0;
+            if (!failsafe_active) {
+                failsafe_stop();
+                failsafe_active = true;
+            }
+            continue;
+        }
 
         failsafe_active = false;
 
@@ -173,9 +197,6 @@ static void input_process_task(void *arg) {
                     rccar_dfplayer_set_volume(v);
                 }
             }
-        } else {
-            if (prev_buttons & BUTTON_SHOULDER_L)
-                rccar_storage_volume_set(rccar_storage_volume_get());
         }
 
         if (evt.buttons & BUTTON_SHOULDER_R) {
@@ -188,9 +209,6 @@ static void input_process_task(void *arg) {
                     rccar_dfplayer_set_volume(v);
                 }
             }
-        } else {
-            if (prev_buttons & BUTTON_SHOULDER_R)
-                rccar_storage_volume_set(rccar_storage_volume_get());
         }
 
         /* Select + Start hold: factory reset (NVS erase + reboot) */
@@ -280,7 +298,11 @@ static void my_platform_on_device_connected(uni_hid_device_t *d) {
 
 static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     logi("custom: device disconnected: %p\n", d);
+    /* Drop connection first so Core1 stops applying any late samples */
+    s_connected = false;
     failsafe_stop();
+    if (input_queue != NULL)
+        xQueueReset(input_queue);
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 }
@@ -290,9 +312,12 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     my_platform_instance_t *ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
-    /* Ensure motors stopped on connect, then play CONNECT */
+    /* Ensure motors stopped / soft state consistent before accepting input */
     rccar_motor_all_stop();
+    s_radar_armed = false;
     rccar_radar_set_armed(false);
+    if (input_queue != NULL)
+        xQueueReset(input_queue);
 
     esp_timer_stop(waiting_idle_timer);
     rccar_dfplayer_stop();
@@ -302,6 +327,8 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     trigger_event_on_gamepad(d);
     if (d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, 400, 128, 200);
+
+    s_connected = true;
     return UNI_ERROR_SUCCESS;
 }
 
@@ -309,7 +336,7 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
     if (ctl->klass != UNI_CONTROLLER_CLASS_GAMEPAD)
         return;
 
-    if (input_queue == NULL)
+    if (!s_connected || input_queue == NULL)
         return;
 
     input_event_t evt = {
