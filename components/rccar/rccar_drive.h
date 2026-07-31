@@ -1,6 +1,6 @@
 /**
  * @file rccar_drive.h
- * @brief 메카넘 홀로노믹 믹스 (스텁)
+ * @brief 메카넘 홀로노믹 믹스
  */
 #ifndef RCCAR_DRIVE_H
 #define RCCAR_DRIVE_H
