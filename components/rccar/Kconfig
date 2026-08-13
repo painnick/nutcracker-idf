@@ -1,0 +1,16 @@
+menu "RCCAR board"
+
+choice RCCAR_BOARD
+    prompt "PCB variant"
+    default RCCAR_BOARD_KINGTIGER_1_1
+    help
+        rccar 핀 매핑을 결정하는 PCB 변형을 선택한다.
+
+    config RCCAR_BOARD_NUTCRACKER_1_0
+        bool "nutcracker 1.0"
+
+    config RCCAR_BOARD_KINGTIGER_1_1
+        bool "kingtiger 1.1"
+endchoice
+
+endmenu
