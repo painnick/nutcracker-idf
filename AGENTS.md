@@ -38,6 +38,11 @@ idf.py flash monitor
 - 핀 변경 시 `rccar_pins.h` 의 해당 보드 변형 블록과 README 핀 맵 두 컬럼을 함께 맞출 것. 보드 변형은 Kconfig `RCCAR_BOARD` (nutcracker1.0 / kingtiger1.1, 기본 kingtiger1.1).
 - v1 제외: 주포/기관총, 포신 상하/반동, 웜 화이트 PWM, 595 최종 연출.
 
+## 스레딩 제약 (코드 변경 시)
+- Core1 `input_process_task` 에서 btstack/Bluepad32 API를 직접 호출하지 말 것. `d->report_parser.*`(럼블, LED 등)도 포함이다. btstack 타이머 리스트에는 락이 없어 Core0 런루프의 타이머 순회와 경쟁하면 리스트가 깨지고 잘못된 주소로 점프한다.
+- 위임에는 `btstack_run_loop_execute_on_main_thread()` 를 쓴다. 콜백 리스트를 뮤텍스로 보호하고 중복 등록을 무시한다. `my_platform.c` 의 `rumble_request` 가 예시다.
+- 플랫폼 콜백(`on_device_ready`, `on_device_disconnected`, `on_controller_data`, `on_init_complete`)은 btstack 스레드에서 실행되므로 그 안에서는 직접 호출해도 된다.
+
 ## 참고
 - 설계: `docs/superpowers/specs/2026-07-31-nutcracker-idf-design.md`
 - 계획: `docs/superpowers/plans/2026-07-31-nutcracker-idf.md`
