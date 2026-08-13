@@ -24,29 +24,31 @@ v1에서 제외: 주포/기관총 발사 시퀀스, 포신 상하/반동 서보,
 
 ## 핀 맵
 
-정의: `components/rccar/rccar_pins.h` (설계 문서 3.1과 동일).
+정의: `components/rccar/rccar_pins.h`. PCB 변형은 Kconfig `RCCAR_BOARD` 로 선택하며 기본값은 **kingtiger1.1** 입니다.
 
-모터 출력에 스트래핑 위험 핀(0, 2, 12, 15)을 쓰지 않습니다.  
+변형 전환: `idf.py menuconfig` → "RCCAR board" → "PCB variant", 또는 `sdkconfig.defaults` 의 `CONFIG_RCCAR_BOARD_*` 를 수정.
+
+모터 출력에 스트래핑 위험 핀(0, 2, 12, 15)을 쓰지 않습니다.
 플래시(6-11), UART0 콘솔(1, 3), 입력 전용(34-39)은 출력에 사용하지 않습니다.
 
-| 기능 | GPIO | 블록 |
-| :--- | ---: | :--- |
-| FL IN1 | 27 | DRV8833 #1 전륜 |
-| FL IN2 | 26 | DRV8833 #1 전륜 |
-| FR IN1 | 25 | DRV8833 #1 전륜 |
-| FR IN2 | 33 | DRV8833 #1 전륜 |
-| RL IN1 | 32 | DRV8833 #2 후륜 |
-| RL IN2 | 14 | DRV8833 #2 후륜 |
-| RR IN1 | 13 | DRV8833 #2 후륜 |
-| RR IN2 | 16 | DRV8833 #2 후륜 |
-| 포탑 IN1 | 22 | DRV8833 #3 |
-| 포탑 IN2 | 21 | DRV8833 #3 |
-| 레이더 서보 | 17 | LEDC |
-| 웜 화이트 MOSFET 게이트 | 4 | Y 토글 |
-| DFPlayer TX | 5 | UART TX |
-| 595 DATA (SER) | 23 | 시프트 LED |
-| 595 CLOCK (SRCLK) | 18 | 시프트 LED |
-| 595 LATCH (RCLK) | 19 | 시프트 LED |
+| 기능 | nutcracker1.0 | kingtiger1.1 | 블록 |
+| :--- | ---: | ---: | :--- |
+| FL IN1 | 27 | 27 | DRV8833 #1 전륜 |
+| FL IN2 | 26 | 26 | DRV8833 #1 전륜 |
+| FR IN1 | 25 | 25 | DRV8833 #1 전륜 |
+| FR IN2 | 33 | 33 | DRV8833 #1 전륜 |
+| RL IN1 | 32 | 32 | DRV8833 #2 후륜 |
+| RL IN2 | 14 | 14 | DRV8833 #2 후륜 |
+| RR IN1 | 13 | 13 | DRV8833 #2 후륜 |
+| RR IN2 | 16 | 16 | DRV8833 #2 후륜 |
+| 포탑 IN1 | 22 | 22 | DRV8833 #3 |
+| 포탑 IN2 | 21 | 21 | DRV8833 #3 |
+| 레이더 서보 | 17 | 17 | LEDC |
+| 웜 화이트 MOSFET 게이트 | 4 | 4 | Y 토글 |
+| DFPlayer TX | 5 | 5 | UART TX |
+| 595 DATA (SER) | 23 | 23 | 시프트 LED |
+| 595 CLOCK (SRCLK) | 18 | 18 | 시프트 LED |
+| 595 LATCH (RCLK) | 19 | 19 | 시프트 LED |
 
 ## 게임패드 조작
 

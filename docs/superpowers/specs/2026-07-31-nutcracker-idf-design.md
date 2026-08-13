@@ -50,6 +50,8 @@ Bluepad32, BTstack, 콘솔 헬퍼, env 패턴, 플랫폼 구조를 복사한다.
 
 ### 3.1 핀 맵 (확정, 물리 배치 우선)
 
+> 핀 매핑은 이제 PCB 변형별로 갈린다 (nutcracker1.0 / kingtiger1.1, 기본 kingtiger1.1). 아래 표는 nutcracker1.0 기준이며 상세는 `docs/superpowers/specs/2026-08-13-rccar-board-pin-variants-design.md` 참조.
+
 모터 출력에 스트래핑 위험 핀(0, 2, 12, 15) 사용 안 함. 플래시(6-11), UART0 콘솔(1, 3), 입력 전용(34-39)은 출력에 사용하지 않음.
 
 | 기능 | GPIO | 블록 |

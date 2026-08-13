@@ -35,7 +35,7 @@ idf.py flash monitor
 
 ## 하드웨어 제약 (코드 변경 시)
 - DC 모터 전부 DRV8833 + MCPWM (LEDC 금지). 그룹당 operator 3 → 휠/포탑 5채널은 group 0+1 분할.
-- 핀 변경 시 `rccar_pins.h` 와 README / 설계 3.1을 함께 맞출 것.
+- 핀 변경 시 `rccar_pins.h` 의 해당 보드 변형 블록과 README 핀 맵 두 컬럼을 함께 맞출 것. 보드 변형은 Kconfig `RCCAR_BOARD` (nutcracker1.0 / kingtiger1.1, 기본 kingtiger1.1).
 - v1 제외: 주포/기관총, 포신 상하/반동, 웜 화이트 PWM, 595 최종 연출.
 
 ## 참고
