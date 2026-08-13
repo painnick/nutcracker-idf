@@ -67,6 +67,7 @@ static my_platform_instance_t *get_my_platform_instance(uni_hid_device_t *d);
 static QueueHandle_t input_queue = NULL;
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
+static esp_timer_handle_t connect_sound_timer = NULL;
 static volatile bool s_radar_armed = false;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
@@ -87,6 +88,13 @@ static void rumble_on_btstack_thread(void *context) {
 static void waiting_idle_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
+}
+
+/* 연결 효과음. stop 직후 바로 play하면 DFPlayer가 무시하므로 잠깐 뒤에 낸다.
+   on_device_ready에서 vTaskDelay로 기다리면 btstack 런루프가 멈추므로 타이머로 미룬다. */
+static void connect_sound_cb(void *arg) {
+    (void)arg;
+    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
 }
 
 static void delayed_restart_cb(void *arg) {
@@ -286,12 +294,28 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "waiting_idle",
     };
     esp_timer_create(&waiting_idle_args, &waiting_idle_timer);
+
+    const esp_timer_create_args_t connect_sound_args = {
+        .callback = &connect_sound_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "connect_sound",
+    };
+    esp_timer_create(&connect_sound_args, &connect_sound_timer);
 }
 
 static void my_platform_on_init_complete(void) {
     logi("custom: on_init_complete()\n");
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
+
+    /* DFPlayer는 uni_init() 밖인 여기서 초기화한다. UART 드라이버 설치와 대기를
+       BT 스택 초기화 도중에 하면 연결이 불안정해진다 (panzer4/king-tiger와 동일). */
+    esp_err_t ret = rccar_dfplayer_init();
+    if (ret != ESP_OK) {
+        loge("rccar_dfplayer_init failed: %s\n", esp_err_to_name(ret));
+        return;
+    }
 
     uint8_t vol = rccar_storage_volume_get();
     rccar_dfplayer_set_volume(vol);
@@ -341,12 +365,12 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
 
     esp_timer_stop(waiting_idle_timer);
     rccar_dfplayer_stop();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
+    esp_timer_stop(connect_sound_timer);
+    esp_timer_start_once(connect_sound_timer, 100 * 1000);
 
+    /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. 셋업 도중 출력 리포트를
+       연달아 보내면 DS4가 링크를 끊을 수 있다. */
     trigger_event_on_gamepad(d);
-    if (d->report_parser.play_dual_rumble != NULL)
-        d->report_parser.play_dual_rumble(d, 0, 400, 128, 200);
 
     s_connected = true;
     return UNI_ERROR_SUCCESS;
