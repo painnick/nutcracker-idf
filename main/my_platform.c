@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include <btstack_run_loop.h>
 #include <platform/uni_platform.h>
 #include <uni.h>
 #include "controller/uni_controller.h"
@@ -70,6 +71,19 @@ static volatile bool s_radar_armed = false;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
 
+/* play_dual_rumble()은 btstack 타이머 리스트를 조작하는데 그 리스트에는 락이 없다.
+   Core1에서 직접 부르면 Core0 런루프의 타이머 순회와 경쟁해 리스트가 깨진다.
+   따라서 Core1은 요청만 걸고 실제 호출은 btstack 스레드에서 수행한다. */
+static btstack_context_callback_registration_t rumble_request;
+static uni_hid_device_t *volatile rumble_device = NULL;
+
+static void rumble_on_btstack_thread(void *context) {
+    (void)context;
+    uni_hid_device_t *d = rumble_device;
+    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
+}
+
 static void waiting_idle_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
@@ -101,6 +115,7 @@ static void input_process_task(void *arg) {
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
     static int64_t select_start_pressed_at = 0;
+    static bool select_start_fired = false;
     static uint16_t prev_buttons = 0;
     static int64_t last_input_ms = 0;
     static bool failsafe_active = true;
@@ -116,6 +131,7 @@ static void input_process_task(void *arg) {
             last_input_ms = 0;
             prev_buttons = 0;
             select_start_pressed_at = 0;
+            select_start_fired = false;
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -217,15 +233,16 @@ static void input_process_task(void *arg) {
         if (sel && sta) {
             if (select_start_pressed_at == 0)
                 select_start_pressed_at = now_ms;
-            if (now_ms - select_start_pressed_at >= SELECT_START_HOLD_MS) {
-                uni_hid_device_t *d = evt.device;
-                if (d != NULL && d->report_parser.play_dual_rumble != NULL)
-                    d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
+            if (!select_start_fired && now_ms - select_start_pressed_at >= SELECT_START_HOLD_MS) {
+                select_start_fired = true;
+                rumble_device = evt.device;
+                btstack_run_loop_execute_on_main_thread(&rumble_request);
                 esp_timer_stop(restart_timer);
                 esp_timer_start_once(restart_timer, 800 * 1000);
             }
         } else {
             select_start_pressed_at = 0;
+            select_start_fired = false;
         }
 
         prev_buttons = evt.buttons;
@@ -242,6 +259,9 @@ static void my_platform_init(int argc, const char **argv) {
         loge("rccar_init failed: %s\n", esp_err_to_name(err));
         return;
     }
+
+    rumble_request.callback = &rumble_on_btstack_thread;
+    rumble_request.context = NULL;
 
     input_queue = xQueueCreate(INPUT_QUEUE_LEN, sizeof(input_event_t));
     configASSERT(input_queue);
