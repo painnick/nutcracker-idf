@@ -283,11 +283,15 @@ esp_err_t rccar_motor_init(void)
     ret = setup_motor_on_group(0, s_timer0, MOTOR_RL, RCCAR_PIN_RL_IN1, RCCAR_PIN_RL_IN2);
     ESP_RETURN_ON_ERROR(ret, TAG, "RL");
 
-    /* group 1: RR, TURRET */
+    /* group 1: RR, TURRET (TURRET 핀이 NC면 미장착으로 보고 건너뜀) */
     ret = setup_motor_on_group(1, s_timer1, MOTOR_RR, RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2);
     ESP_RETURN_ON_ERROR(ret, TAG, "RR");
-    ret = setup_motor_on_group(1, s_timer1, MOTOR_TURRET, RCCAR_PIN_TURRET_IN1, RCCAR_PIN_TURRET_IN2);
-    ESP_RETURN_ON_ERROR(ret, TAG, "TURRET");
+    if (RCCAR_PIN_TURRET_IN1 != GPIO_NUM_NC && RCCAR_PIN_TURRET_IN2 != GPIO_NUM_NC) {
+        ret = setup_motor_on_group(1, s_timer1, MOTOR_TURRET, RCCAR_PIN_TURRET_IN1, RCCAR_PIN_TURRET_IN2);
+        ESP_RETURN_ON_ERROR(ret, TAG, "TURRET");
+    } else {
+        ESP_LOGI(TAG, "turret disabled (pins NC)");
+    }
 
     ret = mcpwm_timer_enable(s_timer0);
     ESP_RETURN_ON_ERROR(ret, TAG, "timer0 enable");

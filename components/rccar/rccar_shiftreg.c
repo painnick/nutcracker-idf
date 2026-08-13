@@ -37,9 +37,22 @@ esp_err_t rccar_shiftreg_init(void)
         return ESP_OK;
     }
 
+    /* 3선 버스 중 하나라도 NC면 미장착으로 보고 비활성 (write32는 s_inited=false로 no-op) */
+    if (RCCAR_PIN_595_DATA == GPIO_NUM_NC || RCCAR_PIN_595_CLOCK == GPIO_NUM_NC ||
+        RCCAR_PIN_595_LATCH == GPIO_NUM_NC) {
+        ESP_LOGI(TAG, "595 disabled (pins NC)");
+        return ESP_OK;
+    }
+
+    /* 상수 NC(-1) 시프트 경고를 피하려 마스크는 런타임 배열로 구성 */
+    const int pins[] = { RCCAR_PIN_595_DATA, RCCAR_PIN_595_CLOCK, RCCAR_PIN_595_LATCH };
+    uint64_t pin_mask = 0;
+    for (int i = 0; i < 3; i++) {
+        pin_mask |= (1ULL << pins[i]);
+    }
+
     gpio_config_t io = {
-        .pin_bit_mask = (1ULL << RCCAR_PIN_595_DATA) | (1ULL << RCCAR_PIN_595_CLOCK) |
-                        (1ULL << RCCAR_PIN_595_LATCH),
+        .pin_bit_mask = pin_mask,
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
