@@ -22,6 +22,9 @@ CONFIG_BLUEPAD32_PLATFORM_CUSTOM=y
 CONFIG_BLUEPAD32_MAX_DEVICES=1
 # Debug로 올리면 HID 리포트마다 30줄씩 찍혀 UART가 막히고 btstack 런루프가 굶는다
 CONFIG_BLUEPAD32_LOG_LEVEL_INFO=y
+# GAP 보안 레벨 2를 요구하면 DualShock 3 계열(저가 클론 포함)이 연결에 실패한다.
+# 레벨 0은 Nintendo Switch Pro를 제외한 모든 컨트롤러가 동작한다 (bluepad32 Kconfig 참고).
+CONFIG_BLUEPAD32_GAP_SECURITY=n
 CONFIG_BLUEPAD32_USB_CONSOLE_ENABLE=n
 CONFIG_BLUEPAD32_ENABLE_BLE_BY_DEFAULT=n
 CONFIG_RCCAR_BOARD_KINGTIGER_1_1=y
