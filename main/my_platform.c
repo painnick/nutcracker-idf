@@ -45,6 +45,8 @@
 #define INPUT_TASK_STACK 4096
 #define INPUT_TASK_PRIO 5
 #define INPUT_POLL_MS 50
+/* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
+#define GAMEPAD_EFFECT_DELAY_MS 500
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
@@ -68,6 +70,7 @@ static QueueHandle_t input_queue = NULL;
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
+static esp_timer_handle_t gamepad_effect_timer = NULL;
 static volatile bool s_radar_armed = false;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
@@ -76,13 +79,15 @@ static volatile bool s_connected = false;
    Core1에서 직접 부르면 Core0 런루프의 타이머 순회와 경쟁해 리스트가 깨진다.
    따라서 Core1은 요청만 걸고 실제 호출은 btstack 스레드에서 수행한다. */
 static btstack_context_callback_registration_t rumble_request;
+static btstack_context_callback_registration_t gamepad_effect_request;
 static uni_hid_device_t *volatile rumble_device = NULL;
+static uni_hid_device_t *volatile gamepad_effect_device = NULL;
 
 static void rumble_on_btstack_thread(void *context) {
-    (void)context;
-    uni_hid_device_t *d = rumble_device;
-    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
-        d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
+    // (void)context;
+    // uni_hid_device_t *d = rumble_device;
+    // if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+    //     d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
 }
 
 static void waiting_idle_cb(void *arg) {
@@ -95,6 +100,18 @@ static void waiting_idle_cb(void *arg) {
 static void connect_sound_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
+}
+
+static void gamepad_effect_on_btstack_thread(void *context) {
+    (void)context;
+    uni_hid_device_t *d = gamepad_effect_device;
+    if (d != NULL)
+        trigger_event_on_gamepad(d);
+}
+
+static void gamepad_effect_cb(void *arg) {
+    (void)arg;
+    btstack_run_loop_execute_on_main_thread(&gamepad_effect_request);
 }
 
 static void delayed_restart_cb(void *arg) {
@@ -270,6 +287,8 @@ static void my_platform_init(int argc, const char **argv) {
 
     rumble_request.callback = &rumble_on_btstack_thread;
     rumble_request.context = NULL;
+    gamepad_effect_request.callback = &gamepad_effect_on_btstack_thread;
+    gamepad_effect_request.context = NULL;
 
     input_queue = xQueueCreate(INPUT_QUEUE_LEN, sizeof(input_event_t));
     configASSERT(input_queue);
@@ -302,6 +321,14 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "connect_sound",
     };
     esp_timer_create(&connect_sound_args, &connect_sound_timer);
+
+    const esp_timer_create_args_t gamepad_effect_args = {
+        .callback = &gamepad_effect_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "gamepad_effect",
+    };
+    esp_timer_create(&gamepad_effect_args, &gamepad_effect_timer);
 }
 
 static void my_platform_on_init_complete(void) {
@@ -338,21 +365,54 @@ static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char *
 
 static void my_platform_on_device_connected(uni_hid_device_t *d) {
     logi("custom: device connected: %p\n", d);
+    /* 가상 자식 장치(DS4 터치패드 마우스 등)는 무시한다. 이 차는 게임패드만 쓴다. */
+    if (d->parent != NULL) {
+        logi("custom: ignoring virtual device\n");
+        return;
+    }
+    /* inquiry(주기적 스캔)는 BR/EDR 대역을 크게 점유한다. 연결 직후 HID 셋업과
+       첫 출력 리포트가 오가는 구간에 겹치면 링크가 굶어 컨트롤러가 끊는다.
+       Bluepad32는 장치가 다 차도 스캔을 자동으로 끄지 않으므로 여기서 끈다.
+       플랫폼 콜백은 btstack 스레드이므로 _unsafe 변형을 쓴다. */
+    uni_bt_stop_scanning_unsafe();
+
+    /* 이미 나가는 연결로 붙은 상태에서 같은 패드가 들어오는 연결을 또 열면,
+       Bluepad32가 기존 연결을 끊어버린다 (uni_bt_bredr.c의 "existing connection").
+       MAX_DEVICES=1이라 연결 중에는 수신을 받을 이유가 없으므로 막는다. */
+    uni_bt_allow_incoming_connections(false);
 }
 
 static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     logi("custom: device disconnected: %p\n", d);
+    /* 가상 자식 장치가 끊긴 것은 게임패드 연결과 무관하다. 여기서 s_connected를
+       내리면 진짜 패드가 붙어 있는데도 입력이 영원히 무시된다. */
+    if (d->parent != NULL) {
+        logi("custom: ignoring virtual device\n");
+        return;
+    }
     /* Drop connection first so Core1 stops applying any late samples */
     s_connected = false;
+    gamepad_effect_device = NULL;
+    esp_timer_stop(gamepad_effect_timer);
     failsafe_stop();
     if (input_queue != NULL)
         xQueueReset(input_queue);
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
+
+    /* 연결이 끊겼으니 다시 새 패드를 받도록 스캔과 수신을 모두 재개 */
+    uni_bt_allow_incoming_connections(true);
+    uni_bt_start_scanning_and_autoconnect_unsafe();
 }
 
 static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     logi("custom: device ready: %p\n", d);
+    /* 가상 자식 장치는 받지 않는다. 거부하면 Bluepad32가 부모와의 링크를 끊는다
+       (uni_hid_parser_ds4.c: "platform rejects the virtual device"). */
+    if (d->parent != NULL) {
+        logi("custom: rejecting virtual device\n");
+        return UNI_ERROR_IGNORE_DEVICE;
+    }
     my_platform_instance_t *ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
 
@@ -368,9 +428,11 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     esp_timer_stop(connect_sound_timer);
     esp_timer_start_once(connect_sound_timer, 100 * 1000);
 
-    /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. 셋업 도중 출력 리포트를
-       연달아 보내면 DS4가 링크를 끊을 수 있다. */
-    trigger_event_on_gamepad(d);
+    /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. DS4는 calibration/fw
+       feature report 교환 중 출력 리포트를 받으면 링크를 끊을 수 있으므로 지연한다. */
+    gamepad_effect_device = d;
+    esp_timer_stop(gamepad_effect_timer);
+    esp_timer_start_once(gamepad_effect_timer, GAMEPAD_EFFECT_DELAY_MS * 1000);
 
     s_connected = true;
     return UNI_ERROR_SUCCESS;
@@ -430,8 +492,8 @@ static my_platform_instance_t *get_my_platform_instance(uni_hid_device_t *d) {
 
 static void trigger_event_on_gamepad(uni_hid_device_t *d) {
     my_platform_instance_t *ins = get_my_platform_instance(d);
-    if (d->report_parser.play_dual_rumble != NULL)
-        d->report_parser.play_dual_rumble(d, 0, 150, 128, 40);
+    // if (d->report_parser.play_dual_rumble != NULL)
+    //     d->report_parser.play_dual_rumble(d, 0, 150, 128, 40);
     if (d->report_parser.set_player_leds != NULL)
         d->report_parser.set_player_leds(d, ins->gamepad_seat);
     if (d->report_parser.set_lightbar_color != NULL) {
