@@ -21,7 +21,8 @@
 #define HID_DEVICE_MAX_PARSER_DATA 256
 #define HID_DEVICE_MAX_PLATFORM_DATA 256
 // HID_DEVICE_CONNECTION_TIMEOUT_MS includes the time from when the device is created until it is ready.
-#define HID_DEVICE_CONNECTION_TIMEOUT_MS 20000
+// BLE HOG on cheap pads needs more than 20s (probe + chars + map + CCC).
+#define HID_DEVICE_CONNECTION_TIMEOUT_MS 45000
 
 typedef enum {
     SDP_QUERY_AFTER_CONNECT,   // If not set, this is the default one.

@@ -69,7 +69,7 @@ void uni_hid_device_setup(void) {
 uni_hid_device_t* uni_hid_device_create(bd_addr_t address) {
     for (int i = 0; i < CONFIG_BLUEPAD32_MAX_DEVICES; i++) {
         if (bd_addr_cmp(g_devices[i].conn.btaddr, zero_addr) == 0) {
-            logi("Creating device: %s (idx=%d)\n", bd_addr_to_str(address), i);
+            logd("Creating device: %s (idx=%d)\n", bd_addr_to_str(address), i);
 
             memset(&g_devices[i], 0, sizeof(g_devices[i]));
             bd_addr_copy(g_devices[i].conn.btaddr, address);
@@ -239,7 +239,7 @@ bool uni_hid_device_set_ready_complete(uni_hid_device_t* d) {
         return false;
     }
 
-    logi("Device setup (%s) is complete\n", bd_addr_to_str(d->conn.btaddr));
+    logd("Device setup (%s) is complete\n", bd_addr_to_str(d->conn.btaddr));
 
     // Remove the timer once the connection was established.
     btstack_run_loop_remove_timer(&d->connection_timer);
@@ -431,7 +431,7 @@ void uni_hid_device_connect(uni_hid_device_t* d) {
         return;
     }
 
-    logi("Device %s is connected\n", bd_addr_to_str(d->conn.btaddr));
+    logd("Device %s is connected\n", bd_addr_to_str(d->conn.btaddr));
 
     // Update connection state
     uni_bt_conn_set_connected(&d->conn, true);
@@ -458,7 +458,7 @@ void uni_hid_device_disconnect(uni_hid_device_t* d) {
     if (uni_hid_device_is_virtual_device(d))
         logi("Disconnecting virtual device: %s\n", bd_addr_to_str(d->conn.btaddr));
     else
-        logi("Disconnecting device: %s\n", bd_addr_to_str(d->conn.btaddr));
+        logd("Disconnecting device: %s\n", bd_addr_to_str(d->conn.btaddr));
 
     connected = d->conn.connected;
 
@@ -588,7 +588,7 @@ void uni_hid_device_guess_controller_type_from_pid_vid(uni_hid_device_t* d) {
     // If it fails, try to guess it from COD
     if (type == CONTROLLER_TYPE_Unknown || type == CONTROLLER_TYPE_UnknownNonSteamController ||
         type == CONTROLLER_TYPE_UnknownSteamController) {
-        logi("Device (vendor_id=0x%04x, product_id=0x%04x) not found in DB.\n", d->vendor_id, d->product_id);
+        logd("Device (vendor_id=0x%04x, product_id=0x%04x) not found in DB.\n", d->vendor_id, d->product_id);
         if (uni_hid_device_is_mouse(d)) {
             type = CONTROLLER_TYPE_GenericMouse;
         } else if (uni_hid_device_is_keyboard(d)) {
@@ -598,7 +598,7 @@ void uni_hid_device_guess_controller_type_from_pid_vid(uni_hid_device_t* d) {
             // answers for SDP queries.
             type = CONTROLLER_TYPE_XBoxOneController;
         } else {
-            loge("Failed to find gamepad profile for device. Fallback: using Android profile.\n");
+            logd("Unknown gamepad profile — using Android parser\n");
             type = CONTROLLER_TYPE_AndroidController;
         }
     }
@@ -637,7 +637,7 @@ void uni_hid_device_guess_controller_type_from_pid_vid(uni_hid_device_t* d) {
                 d->report_parser.play_dual_rumble = uni_hid_parser_stadia_play_dual_rumble;
                 logi("Device detected as Stadia: 0x%02x\n", type);
             } else {
-                logi("Device detected as Android: 0x%02x\n", type);
+                logd("Device detected as Android: 0x%02x\n", type);
             }
             break;
         case CONTROLLER_TYPE_NimbusController:
@@ -974,6 +974,13 @@ static void device_connection_timeout(btstack_timer_source_t* ts) {
     }
     logi("Device cannot connect in time, deleting:\n");
     uni_hid_device_dump_device(d);
+
+    // BLE: drop bond so next attempt re-pairs instead of re-encrypting a broken HOG session.
+    if (d->conn.protocol == UNI_BT_CONN_PROTOCOL_BLE) {
+        gap_delete_bonding(BD_ADDR_TYPE_LE_PUBLIC, d->conn.btaddr);
+        gap_delete_bonding(BD_ADDR_TYPE_LE_RANDOM, d->conn.btaddr);
+        logd("Deleted BLE bond for timed-out device\n");
+    }
 
     uni_hid_device_disconnect(d);
     uni_hid_device_delete(d);

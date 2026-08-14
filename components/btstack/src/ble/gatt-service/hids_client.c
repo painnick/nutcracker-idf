@@ -682,26 +682,36 @@ static void hids_run_for_client(hids_client_t * client){
 #ifdef ENABLE_TESTING_SUPPORT
             printf("\n\nQuery Services:\n");
 #endif
-            client->state = HIDS_CLIENT_STATE_W4_SERVICE_RESULT;
-            
             // result in GATT_EVENT_SERVICE_QUERY_RESULT
             att_status = gatt_client_discover_primary_services_by_uuid16(handle_gatt_client_event, client->con_handle, ORG_BLUETOOTH_SERVICE_HUMAN_INTERFACE_DEVICE);
-            UNUSED(att_status);
+            if (att_status != ERROR_CODE_SUCCESS) {
+                // Do not enter W4 forever if the request was never sent.
+                log_info("hids_client: discover HID service failed status=0x%02x", att_status);
+                hids_emit_connection_established(client, att_status);
+                hids_finalize_client(client);
+            } else {
+                client->state = HIDS_CLIENT_STATE_W4_SERVICE_RESULT;
+            }
             break;
         
         case HIDS_CLIENT_STATE_W2_QUERY_CHARACTERISTIC:
 #ifdef ENABLE_TESTING_SUPPORT
             printf("\n\nQuery Characteristics of service %d:\n", client->service_index);
 #endif
-            client->state = HIDS_CLIENT_STATE_W4_CHARACTERISTIC_RESULT;
-            
             service.start_group_handle = client->services[client->service_index].start_handle;
             service.end_group_handle = client->services[client->service_index].end_handle;
 
+            log_info("hids_client: discover characteristics service %u handles 0x%04x-0x%04x",
+                     client->service_index, service.start_group_handle, service.end_group_handle);
             // result in GATT_EVENT_CHARACTERISTIC_QUERY_RESULT
             att_status = gatt_client_discover_characteristics_for_service(&handle_gatt_client_event, client->con_handle, &service);
-            
-            UNUSED(att_status);
+            if (att_status != ERROR_CODE_SUCCESS) {
+                log_info("hids_client: discover characteristics failed 0x%02x", att_status);
+                hids_emit_connection_established(client, att_status);
+                hids_finalize_client(client);
+            } else {
+                client->state = HIDS_CLIENT_STATE_W4_CHARACTERISTIC_RESULT;
+            }
             break;
 
         case HIDS_CLIENT_STATE_W2_READ_REPORT_MAP_HID_DESCRIPTOR:
@@ -710,9 +720,24 @@ static void hids_run_for_client(hids_client_t * client){
 #endif
             client->state = HIDS_CLIENT_STATE_W4_REPORT_MAP_HID_DESCRIPTOR;
 
-            // result in GATT_EVENT_LONG_CHARACTERISTIC_VALUE_QUERY_RESULT
-            att_status = gatt_client_read_long_value_of_characteristic_using_value_handle(&handle_gatt_client_event, client->con_handle, client->services[client->service_index].report_map_value_handle);
-            UNUSED(att_status);
+            // Prefer a normal ATT Read. Some cheap HID pads hang forever on
+            // Read Blob (long read) even when the report map fits in one MTU.
+            // If the value is truncated we still get enough for Android parsers.
+            log_info("hids_client: read REPORT_MAP handle=0x%04x (short read)",
+                     client->services[client->service_index].report_map_value_handle);
+            att_status = gatt_client_read_value_of_characteristic_using_value_handle(
+                &handle_gatt_client_event, client->con_handle,
+                client->services[client->service_index].report_map_value_handle);
+            if (att_status != ERROR_CODE_SUCCESS) {
+                log_info("hids_client: short REPORT_MAP read failed 0x%02x, try long read", att_status);
+                att_status = gatt_client_read_long_value_of_characteristic_using_value_handle(
+                    &handle_gatt_client_event, client->con_handle,
+                    client->services[client->service_index].report_map_value_handle);
+            }
+            if (att_status != ERROR_CODE_SUCCESS) {
+                log_info("hids_client: REPORT_MAP read start failed 0x%02x", att_status);
+                client->state = HIDS_CLIENT_STATE_W2_READ_REPORT_MAP_HID_DESCRIPTOR;
+            }
             break;
 
         case HIDS_CLIENT_STATE_W2_REPORT_MAP_DISCOVER_CHARACTERISTIC_DESCRIPTORS:
@@ -1005,6 +1030,8 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
                 client->services[index].start_handle = service.start_group_handle;
                 client->services[index].end_handle = service.end_group_handle;
                 client->num_instances++;
+                log_info("hids_client: HID service #%u handles 0x%04x-0x%04x", index,
+                         client->services[index].start_handle, client->services[index].end_handle);
 
 #ifdef ENABLE_TESTING_SUPPORT
                 printf("HID Service: start handle 0x%04X, end handle 0x%04X\n", client->services[index].start_handle, client->services[index].end_handle);
@@ -1162,6 +1189,17 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
             
 
             switch (client->state){
+                case HIDS_CLIENT_STATE_W4_REPORT_MAP_HID_DESCRIPTOR:
+                    // Short ATT Read of Report Map (preferred path for flaky pads)
+                    log_info("hids_client: REPORT_MAP short read len=%u", value_len);
+                    for (i = 0; i < value_len; i++){
+                        bool stored = hids_client_descriptor_storage_store(client, client->service_index, value[i]);
+                        if (!stored){
+                            client->services[client->service_index].hid_descriptor_status = ERROR_CODE_MEMORY_CAPACITY_EXCEEDED;
+                            break;
+                        }
+                    }
+                    break;
 #ifdef ENABLE_TESTING_SUPPORT
                 case HIDS_CLIENT_W4_CHARACTERISTIC_CONFIGURATION_RESULT:
                     printf("    Received CCC value: ");
@@ -1235,6 +1273,8 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
             
             switch (client->state){
                 case HIDS_CLIENT_STATE_W4_SERVICE_RESULT:
+                    log_info("hids_client: service query complete status=0x%02x instances=%u", status,
+                             client->num_instances);
                     if (status != ERROR_CODE_SUCCESS){
                         hids_emit_connection_established(client, status);
                         hids_finalize_client(client);
@@ -1252,6 +1292,8 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
                     break;
                 
                 case HIDS_CLIENT_STATE_W4_CHARACTERISTIC_RESULT:
+                    log_info("hids_client: characteristic query complete status=0x%02x reports=%u", status,
+                             client->num_reports);
                     if (status != ERROR_CODE_SUCCESS){
                         hids_emit_connection_established(client, status);
                         hids_finalize_client(client);
@@ -1277,6 +1319,21 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
                             if (hids_client_report_map_query_init(client)){
                                 break;
                             }
+                            // No report map char — still try notify on Report chars.
+                            log_info("hids_client: no REPORT_MAP, enable notify reports directly");
+                            {
+                                uint8_t ri;
+                                for (ri = 0; ri < client->num_reports; ri++) {
+                                    if (!client->reports[ri].boot_report &&
+                                        (client->reports[ri].properties & ATT_PROPERTY_NOTIFY) != 0) {
+                                        client->reports[ri].report_type = HID_REPORT_TYPE_INPUT;
+                                        client->reports[ri].report_id = 0;
+                                    }
+                                }
+                            }
+                            if (hids_client_report_notifications_init(client)) {
+                                break;
+                            }
                             hids_emit_connection_established(client, ERROR_CODE_UNSUPPORTED_FEATURE_OR_PARAMETER_VALUE); 
                             hids_finalize_client(client);
                             return;
@@ -1290,15 +1347,34 @@ static void handle_gatt_client_event(uint8_t packet_type, uint16_t channel, uint
                     break;
 
 
-                // HID descriptor found
+                // HID descriptor found (short or long read)
                 case HIDS_CLIENT_STATE_W4_REPORT_MAP_HID_DESCRIPTOR:
+                    log_info("hids_client: REPORT_MAP done status=0x%02x desc_len=%u", status,
+                             client->services[client->service_index].hid_descriptor_len);
                     if (status != ERROR_CODE_SUCCESS){
-                        hids_emit_connection_established(client, status);
-                        hids_finalize_client(client);
-                        return;  
+                        // Continue without full map if possible — still try input reports.
+                        log_info("hids_client: REPORT_MAP failed, continuing with notify reports");
                     }
-                    client->state = HIDS_CLIENT_STATE_W2_REPORT_MAP_DISCOVER_CHARACTERISTIC_DESCRIPTORS;
-                    break;
+                    // Skip EXTERNAL_REPORT_REFERENCE walk (hangs on some pads).
+                    // Treat any Report char that supports Notify as INPUT and enable CCC.
+                    {
+                        uint8_t ri;
+                        for (ri = 0; ri < client->num_reports; ri++) {
+                            if (!client->reports[ri].boot_report &&
+                                (client->reports[ri].properties & ATT_PROPERTY_NOTIFY) != 0 &&
+                                client->reports[ri].report_type == HID_REPORT_TYPE_RESERVED) {
+                                client->reports[ri].report_type = HID_REPORT_TYPE_INPUT;
+                                client->reports[ri].report_id = 0;
+                            }
+                        }
+                    }
+                    if (hids_client_report_notifications_init(client)) {
+                        break;
+                    }
+                    // No notifiable reports found — still mark connected so host can try.
+                    client->state = HIDS_CLIENT_STATE_CONNECTED;
+                    hids_emit_connection_established(client, ERROR_CODE_SUCCESS);
+                    return;
 
                 // found all descriptors, check if there is one with EXTERNAL_REPORT_REFERENCE
                 case HIDS_CLIENT_STATE_W4_REPORT_MAP_CHARACTERISTIC_DESCRIPTORS_RESULT:

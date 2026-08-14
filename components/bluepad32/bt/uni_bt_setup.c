@@ -27,15 +27,18 @@ typedef enum {
 
 typedef uint8_t (*fn_t)(void);
 
+static void setup_finish_ready(void);
 static void setup_call_next_fn(void);
+
+#if UNI_ENABLE_BREDR
 static uint8_t setup_set_event_filter(void);
 static uint8_t setup_write_simple_pairing_mode(void);
-
 static int setup_fn_idx = 0;
 static fn_t setup_fns[] = {
     &setup_write_simple_pairing_mode,
     &setup_set_event_filter,
 };
+#endif
 static setup_state_t setup_state = SETUP_STATE_BTSTACK_IN_PROGRESS;
 static btstack_packet_callback_registration_t uni_hci_event_callback_registration;
 
@@ -43,6 +46,7 @@ static btstack_packet_callback_registration_t uni_hci_event_callback_registratio
 // #define MAX_ATTRIBUTE_VALUE_SIZE 300
 // static uint8_t hid_descriptor_storage[MAX_ATTRIBUTE_VALUE_SIZE];
 
+#if UNI_ENABLE_BREDR
 static uint8_t setup_set_event_filter(void) {
     // Filter out inquiry results before we start the inquiry
     return hci_send_cmd(&hci_set_event_filter_inquiry_cod, 0x01, 0x01, UNI_BT_COD_MAJOR_PERIPHERAL,
@@ -52,8 +56,22 @@ static uint8_t setup_set_event_filter(void) {
 static uint8_t setup_write_simple_pairing_mode(void) {
     return hci_send_cmd(&hci_write_simple_pairing_mode, true);
 }
+#endif
+
+static void setup_finish_ready(void) {
+    setup_state = SETUP_STATE_READY;
+    gap_local_bd_addr(uni_local_bd_addr);
+    uni_get_platform()->on_init_complete();
+    if (IS_ENABLED(UNI_ENABLE_BLE) && uni_bt_service_is_enabled())
+        uni_bt_service_init();
+}
 
 static void setup_call_next_fn(void) {
+#if !UNI_ENABLE_BREDR
+    // BLE-only controllers reject classic HCI (e.g. Read Local Name 0x0c05).
+    setup_finish_ready();
+    return;
+#else
     uint8_t status;
 
     if (!hci_can_send_command_packet_now()) {
@@ -71,21 +89,9 @@ static void setup_call_next_fn(void) {
 
     setup_fn_idx++;
     if (setup_fn_idx == ARRAY_SIZE(setup_fns)) {
-        setup_state = SETUP_STATE_READY;
-
-        // If finished with the "setup" commands, finish the setup
-        // by printing some debug version.
-
-        // Populate global variable here, and just once.
-        gap_local_bd_addr(uni_local_bd_addr);
-
-        // Only after all BT setup is done, call on_init_complete()
-        uni_get_platform()->on_init_complete();
-
-        // Platform can disable the service.
-        if (IS_ENABLED(UNI_ENABLE_BLE) && uni_bt_service_is_enabled())
-            uni_bt_service_init();
+        setup_finish_ready();
     }
+#endif
 }
 
 // Public functions

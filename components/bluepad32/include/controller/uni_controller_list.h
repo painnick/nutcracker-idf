@@ -624,7 +624,7 @@ static const uni_controller_description_t arrControllers[] = {
         // Android
         { MAKE_CONTROLLER_ID(0x20d6, 0x6271), k_eControllerType_AndroidController, NULL},  // MOGA Controller, using HID mode
         { MAKE_CONTROLLER_ID(0x0b05, 0x4500), k_eControllerType_AndroidController, NULL},  // Asus Controller
-        { MAKE_CONTROLLER_ID(0x1949, 0x0402), k_eControllerType_AndroidController, NULL},  // Amazon Fire gamepad Controller 1st gen
+        { MAKE_CONTROLLER_ID(0x1949, 0x0402), k_eControllerType_AndroidController, "ShanWan BM-769 / GamePadPlus V3"},  // Also Amazon Fire 1st gen IDs
         { MAKE_CONTROLLER_ID(0x18d1, 0x9400), k_eControllerType_AndroidController, NULL},  // Stadia BLE mode
 
         // Smart TV remotes
