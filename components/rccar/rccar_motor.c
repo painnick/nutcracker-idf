@@ -4,7 +4,7 @@
  *
  * MCPWM group 0: FL, FR, RL (operators 3)
  * MCPWM group 1: RR, TURRET (operators 2)
- * 20 kHz, resolution 1 MHz. 휠만 10ms 램프, 포탑 즉시 듀티.
+ * 20 kHz, resolution 1 MHz. 램프 없이 지정한 속도를 즉시 듀티에 반영한다.
  */
 #include "rccar_motor.h"
 #include "rccar_pins.h"
@@ -15,7 +15,6 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/task.h"
 
 static const char *TAG = "rccar_motor";
 
@@ -26,10 +25,8 @@ static const char *TAG = "rccar_motor";
 /* 스틱/믹스 범위 ±512 → 듀티 비율 */
 #define AXIS_MAX             512
 
-/* panzer4 트랙 램프 파라미터 재사용 (current/target *10 스케일) */
-#define TRACK_DECEL_STEP     16
-#define TRACK_ACCEL_STEP     6
-#define TRACK_MIN_SPEED      448
+/* 0이 아닌 명령의 최소 듀티. 정지 마찰을 이기지 못해 웅웅거리는 것을 막는다. */
+#define WHEEL_MIN_SPEED      448
 
 enum {
     WHEEL_FL = 0,
@@ -57,11 +54,7 @@ static motor_channel_t s_motors[MOTOR_COUNT];
 static mcpwm_timer_handle_t s_timer0 = NULL;
 static mcpwm_timer_handle_t s_timer1 = NULL;
 
-static volatile int32_t s_target[WHEEL_COUNT];
-static int32_t s_current[WHEEL_COUNT];
-
 static SemaphoreHandle_t s_motor_mutex = NULL;
-static TaskHandle_t s_motor_task = NULL;
 static bool s_inited = false;
 
 static void set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_b, int32_t speed)
@@ -87,72 +80,16 @@ static void set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_
     }
 }
 
-static void update_motor_speed(int32_t *current, int32_t target)
+/* 0은 그대로, 그 외에는 최소 듀티 이상으로 올린다 (부호 유지) */
+static int32_t apply_min_speed(int32_t v)
 {
-    int32_t cur = *current;
-    if (cur == target) {
-        return;
+    if (v == 0) {
+        return 0;
     }
-
-    /* 0에서 기동 시 최소 구동 속도(TRACK_MIN_SPEED * 10)로 즉시 점프 */
-    if (cur == 0 && target != 0) {
-        int32_t sign = (target > 0) ? 1 : -1;
-        int32_t start_speed = sign * TRACK_MIN_SPEED * 10;
-        int32_t target_abs = (target > 0) ? target : -target;
-        if (target_abs <= TRACK_MIN_SPEED * 10) {
-            *current = target;
-            return;
-        }
-        cur = start_speed;
-        *current = cur;
+    if (v > 0) {
+        return (v < WHEEL_MIN_SPEED) ? WHEEL_MIN_SPEED : v;
     }
-
-    int32_t diff = target - cur;
-    bool is_decelerating = false;
-
-    if (cur > 0) {
-        if (target < cur) {
-            is_decelerating = true;
-        }
-    } else if (cur < 0) {
-        if (target > cur) {
-            is_decelerating = true;
-        }
-    }
-
-    int32_t step = is_decelerating ? TRACK_DECEL_STEP : TRACK_ACCEL_STEP;
-
-    if (diff > 0) {
-        *current = (diff > step) ? (cur + step) : target;
-    } else {
-        *current = (-diff > step) ? (cur - step) : target;
-    }
-
-    /* 감속 정지 시 최소 구동 속도 이하면 즉시 0 (웅웅거림 방지) */
-    if (target == 0) {
-        int32_t cur_abs = (*current > 0) ? *current : -*current;
-        if (cur_abs < TRACK_MIN_SPEED * 10) {
-            *current = 0;
-        }
-    }
-}
-
-static void motor_update_task(void *pvParameters)
-{
-    (void)pvParameters;
-    TickType_t last_wake = xTaskGetTickCount();
-    while (1) {
-        if (s_motor_mutex && xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
-            for (int i = 0; i < WHEEL_COUNT; i++) {
-                update_motor_speed(&s_current[i], s_target[i] * 10);
-                if (s_motors[i].cmpr_a && s_motors[i].cmpr_b) {
-                    set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, s_current[i] / 10);
-                }
-            }
-            xSemaphoreGive(s_motor_mutex);
-        }
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(10));
-    }
+    return (v > -WHEEL_MIN_SPEED) ? -WHEEL_MIN_SPEED : v;
 }
 
 static esp_err_t setup_generator_pair(mcpwm_oper_handle_t oper,
@@ -245,10 +182,6 @@ esp_err_t rccar_motor_init(void)
 
     esp_err_t ret;
 
-    for (int i = 0; i < WHEEL_COUNT; i++) {
-        s_target[i] = 0;
-        s_current[i] = 0;
-    }
     for (int i = 0; i < MOTOR_COUNT; i++) {
         s_motors[i].cmpr_a = NULL;
         s_motors[i].cmpr_b = NULL;
@@ -305,21 +238,8 @@ esp_err_t rccar_motor_init(void)
 
     s_inited = true;
 
-    rccar_motor_wheel_set_immediate(0, 0, 0, 0);
+    rccar_motor_wheel_set(0, 0, 0, 0);
     rccar_motor_turret_set(0);
-
-    BaseType_t task_ret = xTaskCreatePinnedToCore(
-        motor_update_task,
-        "rccar_motor",
-        4096,
-        NULL,
-        5,
-        &s_motor_task,
-        1);
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "motor task create failed");
-        return ESP_FAIL;
-    }
 
     ESP_LOGI(TAG, "motor init ok (g0:FL/FR/RL g1:RR/TURRET, %d Hz)", MCPWM_FREQ_HZ);
     return ESP_OK;
@@ -331,26 +251,10 @@ void rccar_motor_wheel_set(int fl, int fr, int rl, int rr)
         return;
     }
     if (xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
-        s_target[WHEEL_FL] = fl;
-        s_target[WHEEL_FR] = fr;
-        s_target[WHEEL_RL] = rl;
-        s_target[WHEEL_RR] = rr;
-        xSemaphoreGive(s_motor_mutex);
-    }
-}
-
-void rccar_motor_wheel_set_immediate(int fl, int fr, int rl, int rr)
-{
-    if (!s_inited || !s_motor_mutex) {
-        return;
-    }
-    if (xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
         const int vals[WHEEL_COUNT] = { fl, fr, rl, rr };
         for (int i = 0; i < WHEEL_COUNT; i++) {
-            s_target[i] = vals[i];
-            s_current[i] = vals[i] * 10;
             if (s_motors[i].cmpr_a && s_motors[i].cmpr_b) {
-                set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, vals[i]);
+                set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, apply_min_speed(vals[i]));
             }
         }
         xSemaphoreGive(s_motor_mutex);
@@ -369,6 +273,6 @@ void rccar_motor_turret_set(int speed)
 
 void rccar_motor_all_stop(void)
 {
-    rccar_motor_wheel_set_immediate(0, 0, 0, 0);
+    rccar_motor_wheel_set(0, 0, 0, 0);
     rccar_motor_turret_set(0);
 }

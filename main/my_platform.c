@@ -376,10 +376,10 @@ static void my_platform_on_device_connected(uni_hid_device_t *d) {
        플랫폼 콜백은 btstack 스레드이므로 _unsafe 변형을 쓴다. */
     uni_bt_stop_scanning_unsafe();
 
-    /* 이미 나가는 연결로 붙은 상태에서 같은 패드가 들어오는 연결을 또 열면,
-       Bluepad32가 기존 연결을 끊어버린다 (uni_bt_bredr.c의 "existing connection").
-       MAX_DEVICES=1이라 연결 중에는 수신을 받을 이유가 없으므로 막는다. */
-    uni_bt_allow_incoming_connections(false);
+    /* 수신 연결은 계속 허용한다. Xbox Wireless 계열은 링크가 살아 있어도 새
+       연결을 여는데(uni_bt_bredr.c 주석 참고), 이를 거절하면 컨트롤러가 기존
+       링크를 스스로 끊어버린다. Bluepad32의 "existing connection" 처리가
+       이 경우의 복구 경로다. */
 }
 
 static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
@@ -400,8 +400,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 
-    /* 연결이 끊겼으니 다시 새 패드를 받도록 스캔과 수신을 모두 재개 */
-    uni_bt_allow_incoming_connections(true);
+    /* 연결이 끊겼으니 다시 새 패드를 찾도록 스캔 재개 */
     uni_bt_start_scanning_and_autoconnect_unsafe();
 }
 
