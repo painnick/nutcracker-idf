@@ -48,6 +48,11 @@
 /* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
 #define GAMEPAD_EFFECT_DELAY_MS 500
 
+/* 연결이 끊긴 뒤 스캔을 다시 켜기까지의 유예. inquiry는 BR/EDR 대역을 크게
+   점유해서, 컨트롤러가 스스로 재연결하려는 순간에 켜면 그 절차를 방해한다.
+   Xbox Wireless 계열은 링크가 살아 있어도 새 연결을 여는 특성이 있다. */
+#define SCAN_RESTART_DELAY_MS 2000
+
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
 } my_platform_instance_t;
@@ -71,6 +76,7 @@ static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
 static esp_timer_handle_t gamepad_effect_timer = NULL;
+static esp_timer_handle_t scan_restart_timer = NULL;
 static volatile bool s_radar_armed = false;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
@@ -100,6 +106,14 @@ static void waiting_idle_cb(void *arg) {
 static void connect_sound_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
+}
+
+/* 유예 후 스캔 재개. esp_timer 태스크에서 실행되므로 btstack 스레드에 위임하는
+   _safe 변형을 쓴다 (_unsafe는 btstack 스레드 전용). */
+static void scan_restart_cb(void *arg) {
+    (void)arg;
+    logi("custom: restarting scan\n");
+    uni_bt_start_scanning_and_autoconnect_safe();
 }
 
 static void gamepad_effect_on_btstack_thread(void *context) {
@@ -329,6 +343,14 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "gamepad_effect",
     };
     esp_timer_create(&gamepad_effect_args, &gamepad_effect_timer);
+
+    const esp_timer_create_args_t scan_restart_args = {
+        .callback = &scan_restart_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "scan_restart",
+    };
+    esp_timer_create(&scan_restart_args, &scan_restart_timer);
 }
 
 static void my_platform_on_init_complete(void) {
@@ -374,6 +396,8 @@ static void my_platform_on_device_connected(uni_hid_device_t *d) {
        첫 출력 리포트가 오가는 구간에 겹치면 링크가 굶어 컨트롤러가 끊는다.
        Bluepad32는 장치가 다 차도 스캔을 자동으로 끄지 않으므로 여기서 끈다.
        플랫폼 콜백은 btstack 스레드이므로 _unsafe 변형을 쓴다. */
+    /* 유예 중에 재연결이 성공했다면 예약된 스캔 재시작을 취소한다. */
+    esp_timer_stop(scan_restart_timer);
     uni_bt_stop_scanning_unsafe();
 
     /* 수신 연결은 계속 허용한다. Xbox Wireless 계열은 링크가 살아 있어도 새
@@ -400,8 +424,10 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 
-    /* 연결이 끊겼으니 다시 새 패드를 찾도록 스캔 재개 */
-    uni_bt_start_scanning_and_autoconnect_unsafe();
+    /* 스캔은 바로 켜지 않는다. 컨트롤러가 스스로 재연결하는 구간에 inquiry가
+       겹치면 그 절차를 방해한다. 유예 후에도 연결이 없으면 그때 켠다. */
+    esp_timer_stop(scan_restart_timer);
+    esp_timer_start_once(scan_restart_timer, SCAN_RESTART_DELAY_MS * 1000);
 }
 
 static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
