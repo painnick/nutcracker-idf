@@ -614,15 +614,15 @@ void uni_bt_bredr_on_l2cap_data_packet(uint16_t channel, const uint8_t* packet, 
         return;
     }
 
-    // Sanity check. It must have at least a transaction type and a report id.
-    if (size < 2) {
-        // Might happen with certain gamepads like DS3 that sends a "0" after enabling rumble.
-        loge("on_l2cap_data_packet: invalid packet size, ignoring packet\n");
+    if (channel == d->conn.control_cid) {
+        uni_bt_bredr_handle_control_channel(d, packet, size);
         return;
     }
 
-    if (channel == d->conn.control_cid) {
-        uni_bt_bredr_handle_control_channel(d, packet, size);
+    // Sanity check. Interrupt reports need at least transaction type + report id.
+    if (size < 2) {
+        // Might happen with certain gamepads like DS3 that sends a "0" after enabling rumble.
+        loge("on_l2cap_data_packet: invalid packet size, ignoring packet\n");
         return;
     }
 

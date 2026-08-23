@@ -506,6 +506,9 @@ void uni_hid_device_delete(uni_hid_device_t* d) {
     // Remove the timer. If it was still running, it will crash if the handler gets called.
     btstack_run_loop_remove_timer(&d->connection_timer);
 
+    if (d->controller_type == CONTROLLER_TYPE_XBoxOneController)
+        uni_hid_parser_xboxone_teardown(d);
+
     uni_hid_device_init(d);
 }
 
@@ -652,6 +655,7 @@ void uni_hid_device_guess_controller_type_from_pid_vid(uni_hid_device_t* d) {
                 d->report_parser.play_dual_rumble = uni_hid_parser_stadia_play_dual_rumble;
                 logi("Device detected as Stadia: 0x%02x\n", type);
             } else {
+                d->report_parser.play_dual_rumble = uni_hid_parser_android_play_dual_rumble;
                 logd("Device detected as Android: 0x%02x\n", type);
             }
             break;

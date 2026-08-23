@@ -26,6 +26,8 @@ void uni_hid_parser_xboxone_play_dual_rumble(struct uni_hid_device_s* d,
                                              uint8_t strong_magnitude);
 void uni_hid_parser_xboxone_device_dump(struct uni_hid_device_s* d);
 
+void uni_hid_parser_xboxone_teardown(struct uni_hid_device_s* d);
+
 // Unique to Xbox. Not part of the "hid_parser" interface
 void xboxone_play_quad_rumble(struct uni_hid_device_s* d,
                               uint16_t start_delay_ms,

@@ -10,8 +10,11 @@
 
 #include "parser/uni_hid_parser_xboxone.h"
 
+#include "bt/uni_bt_conn.h"
 #include "controller/uni_controller.h"
 #include "hid_usage.h"
+#include "sdkconfig.h"
+#include "uni_common.h"
 #include "uni_hid_device.h"
 #include "uni_log.h"
 
@@ -23,6 +26,7 @@
 #define XBOX_RUMBLE_REPORT_ID 0x03
 
 #define BLE_RETRY_MS 50
+#define XBOX_KEEPALIVE_MS 8000
 
 static const uint16_t XBOX_WIRELESS_VID = 0x045e;  // Microsoft
 static const uint16_t XBOX_WIRELESS_PID = 0x02e0;  // Xbox One (Bluetooth)
@@ -110,12 +114,20 @@ typedef struct xboxone_instance_s {
     uint8_t rumble_weak_magnitude;
     uint8_t rumble_strong_magnitude;
 
+    btstack_timer_source_t keepalive_timer;
+    bool keepalive_active;
+
 } xboxone_instance_t;
 _Static_assert(sizeof(xboxone_instance_t) < HID_DEVICE_MAX_PARSER_DATA, "Xbox one instance too big");
 
 static xboxone_instance_t* get_xboxone_instance(uni_hid_device_t* d);
 static void on_xboxone_set_rumble_on(btstack_timer_source_t* ts);
 static void on_xboxone_set_rumble_off(btstack_timer_source_t* ts);
+static void xboxone_send_zero_ff(uni_hid_device_t* d);
+static void xboxone_send_claim_output(uni_hid_device_t* d);
+static void xboxone_stop_keepalive(uni_hid_device_t* d);
+static void xboxone_start_keepalive(uni_hid_device_t* d);
+static void on_xboxone_keepalive(btstack_timer_source_t* ts);
 static void xboxone_stop_rumble_now(uni_hid_device_t* d);
 static void xboxone_play_quad_rumble_now(uni_hid_device_t* d,
                                          uint16_t duration_ms,
@@ -152,23 +164,44 @@ bool uni_hid_parser_xboxone_does_name_match(struct uni_hid_device_s* d, const ch
     return true;
 }
 
+static bool xboxone_descriptor_has_ff_page(const uni_hid_device_t* d) {
+    if (d->hid_descriptor_len < 2)
+        return false;
+    for (uint16_t i = 0; i + 1 < d->hid_descriptor_len; i++) {
+        if (d->hid_descriptor[i] == 0x05 && d->hid_descriptor[i + 1] == 0x0f)
+            return true;
+    }
+    return false;
+}
+
 void uni_hid_parser_xboxone_setup(uni_hid_device_t* d) {
     xboxone_instance_t* ins = get_xboxone_instance(d);
-    // FIXME: Parse HID descriptor and see if it supports 0xf buttons. Checking
-    // for the len is a horrible hack.
     if (gap_get_connection_type(d->conn.handle) == GAP_CONNECTION_LE) {
         logi("Xbox: Assuming it is firmware v5.x\n");
         ins->version = XBOXONE_FIRMWARE_V5;
+    } else if (xboxone_descriptor_has_ff_page(d)) {
+        logi("Xbox: Assuming it is firmware v4.8 (FF page in descriptor)\n");
+        ins->version = XBOXONE_FIRMWARE_V4_8;
     } else if (d->hid_descriptor_len > 330) {
         logi("Xbox: Assuming it is firmware v4.8\n");
         ins->version = XBOXONE_FIRMWARE_V4_8;
     } else {
-        // If it is really firmware 4.8, it will be set later.
         logi("Xbox: Assuming it is firmware v3.1\n");
         ins->version = XBOXONE_FIRMWARE_V3_1;
     }
 
+    if (IS_ENABLED(UNI_ENABLE_BREDR) && uni_hid_device_is_incoming(d) &&
+        gap_get_connection_type(d->conn.handle) == GAP_CONNECTION_ACL) {
+        xboxone_start_keepalive(d);
+    }
+
     uni_hid_device_set_ready_complete(d);
+}
+
+void uni_hid_parser_xboxone_teardown(uni_hid_device_t* d) {
+    if (d == NULL)
+        return;
+    xboxone_stop_keepalive(d);
 }
 
 void uni_hid_parser_xboxone_init_report(uni_hid_device_t* d) {
@@ -349,11 +382,22 @@ static void parse_usage_firmware_v4_v5(uni_hid_device_t* d,
                 case HID_USAGE_AXIS_Y:
                     ctl->gamepad.axis_y = uni_hid_parser_process_axis(globals, value);
                     break;
-                case HID_USAGE_AXIS_Z:
+                /* Right stick: 0x33/0x34. Z/RZ (0x32/0x35) are 10-bit trigger axes below. */
+                case HID_USAGE_AXIS_RX:
                     ctl->gamepad.axis_rx = uni_hid_parser_process_axis(globals, value);
                     break;
-                case HID_USAGE_AXIS_RZ:
+                case HID_USAGE_AXIS_RY:
                     ctl->gamepad.axis_ry = uni_hid_parser_process_axis(globals, value);
+                    break;
+                case HID_USAGE_AXIS_Z:
+                    ctl->gamepad.brake = uni_hid_parser_process_pedal(globals, value);
+                    if (ctl->gamepad.brake >= TRIGGER_BUTTON_THRESHOLD)
+                        ctl->gamepad.buttons |= BUTTON_TRIGGER_L;
+                    break;
+                case HID_USAGE_AXIS_RZ:
+                    ctl->gamepad.throttle = uni_hid_parser_process_pedal(globals, value);
+                    if (ctl->gamepad.throttle >= TRIGGER_BUTTON_THRESHOLD)
+                        ctl->gamepad.buttons |= BUTTON_TRIGGER_R;
                     break;
                 case HID_USAGE_HAT:
                     hat = uni_hid_parser_process_hat(globals, value);
@@ -592,18 +636,44 @@ static void xboxone_retry_cmd(uni_hid_device_t* d, xboxone_retry_cmd_t cmd) {
     }
 }
 
-static void xboxone_stop_rumble_now(uni_hid_device_t* d) {
-    uint8_t status;
+static void xboxone_send_claim_output(uni_hid_device_t* d) {
     xboxone_instance_t* ins = get_xboxone_instance(d);
-
-    // No need to protect it with a mutex since it runs in the same main thread
-    assert(ins->rumble_state != XBOXONE_STATE_RUMBLE_DISABLED);
-    ins->rumble_state = XBOXONE_STATE_RUMBLE_DISABLED;
 
     struct xboxone_ff_report ff = {
         .transaction_type = (HID_MESSAGE_TYPE_DATA << 4) | HID_REPORT_TYPE_OUTPUT,
         .report_id = XBOX_RUMBLE_REPORT_ID,
-        .enable_actuators = XBOXONE_FF_TRIGGER_LEFT | XBOXONE_FF_TRIGGER_RIGHT | XBOXONE_FF_WEAK | XBOXONE_FF_STRONG,
+        .enable_actuators = 0,
+        .magnitude_left_trigger = 0,
+        .magnitude_right_trigger = 0,
+        .magnitude_strong = 0,
+        .magnitude_weak = 0,
+        .duration_10ms = 0,
+        .start_delay_10ms = 0,
+        .loop_count = 0,
+    };
+
+    if (ins->version == XBOXONE_FIRMWARE_V5) {
+        uint8_t status = hids_client_send_write_report(d->hids_cid, XBOX_RUMBLE_REPORT_ID, HID_REPORT_TYPE_OUTPUT,
+                                                       &ff.enable_actuators, sizeof(ff) - 2);
+        if (status != ERROR_CODE_SUCCESS && status != ERROR_CODE_COMMAND_DISALLOWED)
+            logi("Xbox: Failed to send claim report, error=%#x\n", status);
+    } else if (IS_ENABLED(UNI_ENABLE_BREDR) && uni_hid_device_is_incoming(d)) {
+        /* Interrupt FF makes the Xbox LED blink; control SET_REPORT is enough to stay connected. */
+        ff.transaction_type = (HID_MESSAGE_TYPE_SET_REPORT << 4) | HID_REPORT_TYPE_OUTPUT;
+        uni_hid_device_send_ctrl_report(d, (uint8_t*)&ff, sizeof(ff));
+    } else {
+        uni_hid_device_send_intr_report(d, (uint8_t*)&ff, sizeof(ff));
+    }
+}
+
+static void xboxone_send_zero_ff(uni_hid_device_t* d) {
+    uint8_t status;
+    xboxone_instance_t* ins = get_xboxone_instance(d);
+
+    struct xboxone_ff_report ff = {
+        .transaction_type = (HID_MESSAGE_TYPE_DATA << 4) | HID_REPORT_TYPE_OUTPUT,
+        .report_id = XBOX_RUMBLE_REPORT_ID,
+        .enable_actuators = 0,
         .magnitude_left_trigger = 0,
         .magnitude_right_trigger = 0,
         .magnitude_strong = 0,
@@ -615,21 +685,52 @@ static void xboxone_stop_rumble_now(uni_hid_device_t* d) {
 
     if (ins->version == XBOXONE_FIRMWARE_V5) {
         status = hids_client_send_write_report(d->hids_cid, XBOX_RUMBLE_REPORT_ID, HID_REPORT_TYPE_OUTPUT,
-                                               &ff.enable_actuators,  // skip the first type bytes,
-                                               sizeof(ff) - 2         // subtract the 2 bytes from total
-        );
-        if (status == ERROR_CODE_COMMAND_DISALLOWED) {
-            logd("Xbox: Failed to turn off rumble, error=%#x, retrying...\n", status);
-            xboxone_retry_cmd(d, XBOXONE_RETRY_CMD_RUMBLE_OFF);
-            return;
-        } else if (status != ERROR_CODE_SUCCESS) {
-            // Do nothing, log the error
-            logi("Xbox: Failed to turn off rumble, error=%#x\n", status);
-        }
-        // else, SUCCESS
+                                               &ff.enable_actuators, sizeof(ff) - 2);
+        if (status != ERROR_CODE_SUCCESS && status != ERROR_CODE_COMMAND_DISALLOWED)
+            logi("Xbox: Failed to send zero FF report, error=%#x\n", status);
     } else {
         uni_hid_device_send_intr_report(d, (uint8_t*)&ff, sizeof(ff));
     }
+}
+
+static void on_xboxone_keepalive(btstack_timer_source_t* ts) {
+    uni_hid_device_t* d = ts->context;
+    xboxone_instance_t* ins = get_xboxone_instance(d);
+
+    if (d == NULL || !ins->keepalive_active ||
+        uni_bt_conn_get_state(&d->conn) != UNI_BT_CONN_STATE_DEVICE_READY) {
+        ins->keepalive_active = false;
+        return;
+    }
+
+    xboxone_send_claim_output(d);
+    btstack_run_loop_set_timer(ts, XBOX_KEEPALIVE_MS);
+    btstack_run_loop_add_timer(ts);
+}
+
+static void xboxone_start_keepalive(uni_hid_device_t* d) {
+    xboxone_instance_t* ins = get_xboxone_instance(d);
+    xboxone_stop_keepalive(d);
+    ins->keepalive_active = true;
+    ins->keepalive_timer.process = &on_xboxone_keepalive;
+    ins->keepalive_timer.context = d;
+    xboxone_send_claim_output(d);
+    btstack_run_loop_set_timer(&ins->keepalive_timer, XBOX_KEEPALIVE_MS);
+    btstack_run_loop_add_timer(&ins->keepalive_timer);
+}
+
+static void xboxone_stop_keepalive(uni_hid_device_t* d) {
+    xboxone_instance_t* ins = get_xboxone_instance(d);
+    ins->keepalive_active = false;
+    btstack_run_loop_remove_timer(&ins->keepalive_timer);
+}
+
+static void xboxone_stop_rumble_now(uni_hid_device_t* d) {
+    xboxone_instance_t* ins = get_xboxone_instance(d);
+
+    assert(ins->rumble_state != XBOXONE_STATE_RUMBLE_DISABLED);
+    ins->rumble_state = XBOXONE_STATE_RUMBLE_DISABLED;
+    xboxone_send_zero_ff(d);
 }
 
 static void xboxone_play_quad_rumble_now(uni_hid_device_t* d,
@@ -644,8 +745,11 @@ static void xboxone_play_quad_rumble_now(uni_hid_device_t* d,
     xboxone_instance_t* ins = get_xboxone_instance(d);
 
     if (duration_ms == 0) {
-        if (ins->rumble_state != XBOXONE_STATE_RUMBLE_DISABLED)
-            xboxone_stop_rumble_now(d);
+        xboxone_send_zero_ff(d);
+        if (ins->rumble_state != XBOXONE_STATE_RUMBLE_DISABLED) {
+            btstack_run_loop_remove_timer(&ins->rumble_timer_duration);
+            ins->rumble_state = XBOXONE_STATE_RUMBLE_DISABLED;
+        }
         return;
     }
 

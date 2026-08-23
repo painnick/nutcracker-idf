@@ -13,6 +13,7 @@
 #include <platform/uni_platform.h>
 #include <uni.h>
 #include "controller/uni_controller.h"
+#include "controller/uni_controller_type.h"
 #include "controller/uni_gamepad.h"
 
 #include "esp_timer.h"
@@ -36,9 +37,9 @@
 #define DEBOUNCE_MS 100
 #define WARM_WHITE_DEBOUNCE_MS 400
 #define SELECT_START_HOLD_MS 3000
-#define X_RUMBLE_DURATION_MS 150
-#define X_RUMBLE_WEAK 128
-#define X_RUMBLE_STRONG 40
+#define X_RUMBLE_DURATION_MS 500
+#define X_RUMBLE_WEAK 255
+#define X_RUMBLE_STRONG 255
 #define HUMIDIFIER_PULSE_ON_MS 3000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
@@ -52,6 +53,7 @@
 #define INPUT_POLL_MS 50
 /* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
 #define GAMEPAD_EFFECT_DELAY_MS 500
+#define GAMEPAD_KEEPALIVE_MS 4000
 
 /* 연결이 끊긴 뒤 스캔을 다시 켜기까지의 유예. inquiry는 BR/EDR 대역을 크게
    점유해서, 컨트롤러가 스스로 재연결하려는 순간에 켜면 그 절차를 방해한다.
@@ -82,6 +84,7 @@ static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
 static esp_timer_handle_t gamepad_effect_timer = NULL;
+static esp_timer_handle_t gamepad_keepalive_timer = NULL;
 static esp_timer_handle_t scan_restart_timer = NULL;
 static esp_timer_handle_t humidifier_pulse_timer = NULL;
 static volatile bool s_radar_armed = false;
@@ -93,11 +96,27 @@ static volatile bool s_connected = false;
    따라서 Core1은 요청만 걸고 실제 호출은 btstack 스레드에서 수행한다. */
 static btstack_context_callback_registration_t rumble_request;
 static btstack_context_callback_registration_t gamepad_effect_request;
+static btstack_context_callback_registration_t keepalive_request;
 static uni_hid_device_t *volatile rumble_device = NULL;
 static uint16_t volatile rumble_duration_ms = X_RUMBLE_DURATION_MS;
 static uint8_t volatile rumble_weak = X_RUMBLE_WEAK;
 static uint8_t volatile rumble_strong = X_RUMBLE_STRONG;
 static uni_hid_device_t *volatile gamepad_effect_device = NULL;
+static uni_hid_device_t *volatile keepalive_device = NULL;
+static uint16_t s_gamepad_prev_buttons = 0;
+
+static bool device_uses_parser_keepalive(uni_hid_device_t *d) {
+    return d != NULL && d->controller_type == CONTROLLER_TYPE_XBoxOneController;
+}
+
+static void handle_x_button_press(uni_hid_device_t *d) {
+    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
+    if (rccar_humidifier_available()) {
+        esp_timer_stop(humidifier_pulse_timer);
+        esp_timer_start_once(humidifier_pulse_timer, (uint64_t)X_RUMBLE_DURATION_MS * 1000ULL);
+    }
+}
 
 static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t weak, uint8_t strong) {
     rumble_device = d;
@@ -140,8 +159,39 @@ static void scan_restart_cb(void *arg) {
 static void gamepad_effect_on_btstack_thread(void *context) {
     (void)context;
     uni_hid_device_t *d = gamepad_effect_device;
-    if (d != NULL)
+    if (d != NULL) {
         trigger_event_on_gamepad(d);
+        /* DS3/Android 등: claim 출력. Xbox는 파서 keep-alive가 처리한다. */
+        if (d->report_parser.play_dual_rumble != NULL && !device_uses_parser_keepalive(d))
+            d->report_parser.play_dual_rumble(d, 0, 0, 0, 0);
+    }
+}
+
+static void gamepad_keepalive_on_btstack_thread(void *context) {
+    (void)context;
+    uni_hid_device_t *d = keepalive_device;
+    if (d == NULL || !s_connected)
+        return;
+    if (d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, 0, 0, 0);
+}
+
+static void gamepad_keepalive_cb(void *arg) {
+    (void)arg;
+    btstack_run_loop_execute_on_main_thread(&keepalive_request);
+}
+
+static void gamepad_keepalive_start(uni_hid_device_t *d) {
+    if (device_uses_parser_keepalive(d))
+        return;
+    keepalive_device = d;
+    esp_timer_stop(gamepad_keepalive_timer);
+    esp_timer_start_periodic(gamepad_keepalive_timer, (uint64_t)GAMEPAD_KEEPALIVE_MS * 1000ULL);
+}
+
+static void gamepad_keepalive_stop(void) {
+    keepalive_device = NULL;
+    esp_timer_stop(gamepad_keepalive_timer);
 }
 
 static void gamepad_effect_cb(void *arg) {
@@ -260,17 +310,6 @@ static void input_process_task(void *arg) {
             }
         }
 
-        /* X edge: rumble, then humidifier pulse (kingtiger1.1) */
-        if (evt.buttons & BUTTON_X) {
-            if (!(prev_buttons & BUTTON_X)) {
-                request_rumble(evt.device, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
-                if (rccar_humidifier_available()) {
-                    esp_timer_stop(humidifier_pulse_timer);
-                    esp_timer_start_once(humidifier_pulse_timer, (uint64_t)X_RUMBLE_DURATION_MS * 1000ULL);
-                }
-            }
-        }
-
         /* L1 / R1: volume - / + */
         if (evt.buttons & BUTTON_SHOULDER_L) {
             if (now_ms - last_l1_ms >= DEBOUNCE_MS) {
@@ -332,6 +371,8 @@ static void my_platform_init(int argc, const char **argv) {
     rumble_request.context = NULL;
     gamepad_effect_request.callback = &gamepad_effect_on_btstack_thread;
     gamepad_effect_request.context = NULL;
+    keepalive_request.callback = &gamepad_keepalive_on_btstack_thread;
+    keepalive_request.context = NULL;
 
     input_queue = xQueueCreate(INPUT_QUEUE_LEN, sizeof(input_event_t));
     configASSERT(input_queue);
@@ -372,6 +413,14 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "gamepad_effect",
     };
     esp_timer_create(&gamepad_effect_args, &gamepad_effect_timer);
+
+    const esp_timer_create_args_t gamepad_keepalive_args = {
+        .callback = &gamepad_keepalive_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "gamepad_keepalive",
+    };
+    esp_timer_create(&gamepad_keepalive_args, &gamepad_keepalive_timer);
 
     const esp_timer_create_args_t scan_restart_args = {
         .callback = &scan_restart_cb,
@@ -454,7 +503,9 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     /* Drop connection first so Core1 stops applying any late samples */
     s_connected = false;
     gamepad_effect_device = NULL;
+    s_gamepad_prev_buttons = 0;
     esp_timer_stop(gamepad_effect_timer);
+    gamepad_keepalive_stop();
     esp_timer_stop(humidifier_pulse_timer);
     failsafe_stop();
     if (input_queue != NULL)
@@ -495,6 +546,7 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     gamepad_effect_device = d;
     esp_timer_stop(gamepad_effect_timer);
     esp_timer_start_once(gamepad_effect_timer, GAMEPAD_EFFECT_DELAY_MS * 1000);
+    gamepad_keepalive_start(d);
 
     s_connected = true;
     return UNI_ERROR_SUCCESS;
@@ -507,12 +559,17 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
     if (!s_connected || input_queue == NULL)
         return;
 
+    uint16_t buttons = ctl->gamepad.buttons;
+    if ((buttons & BUTTON_X) && !(s_gamepad_prev_buttons & BUTTON_X))
+        handle_x_button_press(d);
+    s_gamepad_prev_buttons = buttons;
+
     input_event_t evt = {
         .axis_x = ctl->gamepad.axis_x,
         .axis_y = ctl->gamepad.axis_y,
         .axis_rx = ctl->gamepad.axis_rx,
         .dpad = ctl->gamepad.dpad,
-        .buttons = ctl->gamepad.buttons,
+        .buttons = buttons,
         .misc_buttons = ctl->gamepad.misc_buttons,
         .device = d,
         .timestamp_ms = esp_timer_get_time() / 1000,
