@@ -314,7 +314,22 @@ void uni_hid_parser_ds3_setup(struct uni_hid_device_s* d) {
                                              0x03,
                                              0x00,
                                              0x00};
-    uni_hid_device_send_ctrl_report(d, (uint8_t*)&sixaxisEnableReports, sizeof(sixaxisEnableReports));
+
+    // Devices that reached the DS3 parser through the "no VID/PID from SDP" fallback are
+    // clones, not a genuine Sixaxis. They do not understand the magic packet and drop the
+    // link when they receive it, so only send it to a device that identified itself.
+    if (d->vendor_id == 0 && d->product_id == 0) {
+        logi("DS3 clone: skipping Sixaxis enable-reports packet\n");
+    } else {
+        uni_hid_device_send_ctrl_report(d, (uint8_t*)&sixaxisEnableReports, sizeof(sixaxisEnableReports));
+    }
+
+    // A DS3 disconnects if the host never claims it with an output report. That report is
+    // only sent from parse_input_report(), and only once set_player_leds() has moved the
+    // state to DS3_FSM_REQUIRES_LED_UPDATE. Platforms that assign the seat later (this one
+    // defers it) are too late: the pad drops the link within a couple of input reports.
+    // Prime the state here so ds3_update_led() runs on the very first input report.
+    uni_hid_parser_ds3_set_player_leds(d, 0x01);
 
     // TODO: should set "ready_complete" once we receive an ack from DS3 regarding report id 0xf4 (???)
     uni_hid_device_set_ready_complete(d);

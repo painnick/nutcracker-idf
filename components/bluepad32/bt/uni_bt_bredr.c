@@ -521,9 +521,15 @@ void uni_bt_bredr_on_l2cap_data_packet(uint16_t channel, const uint8_t* packet, 
     // It must be an input report
     // DATA | INPUT_REPORT: 0xa1
     if (packet[0] != ((HID_MESSAGE_TYPE_DATA << 4) | HID_REPORT_TYPE_INPUT)) {
-        loge("on_l2cap_data_packet: unexpected transaction type: got 0x%02x, want: 0x0a1\n", packet[0]);
-        printf_hexdump(packet, size);
-        return;
+        // Some PS3 clones send 0x00 instead of the 0xa1 transaction header, while the rest
+        // of the packet is a well-formed report (report id + payload). Accept those: dropping
+        // them means no input at all, and logging every rejected report floods the UART at
+        // the pad's report rate, which starves the btstack run loop.
+        if (packet[0] != 0x00) {
+            loge("on_l2cap_data_packet: unexpected transaction type: got 0x%02x, want: 0x0a1\n", packet[0]);
+            printf_hexdump(packet, size);
+            return;
+        }
     }
 
     // Skip the first byte, which is always 0xa1
@@ -654,11 +660,17 @@ void uni_bt_bredr_on_hci_connection_complete(uint16_t channel, const uint8_t* pa
         // gap_request_security_level(handle, LEVEL_1);
     }
 #ifndef CONFIG_BLUEPAD32_GAP_SECURITY
-    // Seems to help on certain devices when using GAP Security level 0.
-    // For exmaple, Dualshock 3 and Nintendo Switch works when the l2cap security level is 0,
-    // and then I request it here to be 2.
-    // But this is not perfect solution, since other gamepads requires that L2CAP be at Level 2.
-    gap_request_security_level(handle, LEVEL_2);
+    // Upstream requests LEVEL_2 here when the global GAP security level is 0. Cheap PS3
+    // clones cannot complete that authentication: it always ends with
+    // HCI_EVENT_AUTHENTICATION_COMPLETE status=0x13 (remote user terminated) and the link
+    // is dropped shortly after the HID channels open. Staying at level 0 keeps them alive.
+    //
+    // Upstream note kept for reference:
+    //   Seems to help on certain devices when using GAP Security level 0.
+    //   For exmaple, Dualshock 3 and Nintendo Switch works when the l2cap security level is 0,
+    //   and then I request it here to be 2.
+    //   But this is not perfect solution, since other gamepads requires that L2CAP be at Level 2.
+    ARG_UNUSED(handle);
 #endif
 }
 
@@ -701,7 +713,15 @@ void uni_bt_bredr_on_hci_pin_code_request(uint16_t channel, const uint8_t* packe
         logi("Using PIN code: '0000'\n");
         gap_pin_code_response_binary(event_addr, (uint8_t*)"0000", 4);
     } else {
-        // FIXME: Assumes incoming connection from Nintendo Wii using Sync.
+        // Upstream sends the host BD address reversed here, which is the Nintendo Wii
+        // "sync button" convention (see the FIXME kept below). Cheap gamepads, including
+        // the PS3 clones this project targets, expect the generic "0000" instead and
+        // terminate authentication when they get the Wii PIN.
+        //
+        // A Wiimote and a PS3 clone report the same COD (0x2504), so they cannot be told
+        // apart at PIN time. This project does not use Wiimotes, so "0000" wins.
+        //
+        // FIXME (upstream): Assumes incoming connection from Nintendo Wii using Sync.
         // Move as a plugin to Wii code.
         //
         // From: https://wiibrew.org/wiki/Wiimote#Bluetooth_Pairing:
@@ -709,11 +729,10 @@ void uni_bt_bredr_on_hci_pin_code_request(uint16_t channel, const uint8_t* packe
         //  bluetooth address of the wiimote backwards, if connecting by
         //  pressing the "sync" button on the back of the wiimote, then the
         //  PIN is the bluetooth address of the host backwards.
-        gap_local_bd_addr(local_addr);
-        reverse_bd_addr(local_addr, pin_code);
-        logi("Using PIN code: \n");
-        printf_hexdump(pin_code, sizeof(pin_code));
-        gap_pin_code_response_binary(event_addr, pin_code, sizeof(pin_code));
+        ARG_UNUSED(local_addr);
+        ARG_UNUSED(pin_code);
+        logi("Using PIN code: '0000'\n");
+        gap_pin_code_response_binary(event_addr, (uint8_t*)"0000", 4);
     }
 }
 

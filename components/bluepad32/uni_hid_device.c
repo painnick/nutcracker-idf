@@ -585,6 +585,18 @@ void uni_hid_device_guess_controller_type_from_pid_vid(uni_hid_device_t* d) {
     // Try to guess it from Vendor/Product id.
     uni_controller_type_t type = uni_guess_controller_type(d->vendor_id, d->product_id);
 
+    // SDP returned no VID/PID at all. The DB maps 0x0000/0x0000 to XBox360Controller
+    // ("Unknown Controller"), which has no case in the switch below and falls through to
+    // the generic parser. That parser uses parse_usage and therefore needs a HID
+    // descriptor, but the SDP query for it drops the link on cheap DualShock 3 clones:
+    // they pair with legacy PIN (host BD address) and serve no usable SDP records.
+    // The DS3 parser only uses parse_input_report, so no descriptor query is needed.
+    if (d->vendor_id == 0 && d->product_id == 0 && !uni_hid_device_is_mouse(d) &&
+        !uni_hid_device_is_keyboard(d)) {
+        logi("No VID/PID from SDP, assuming DualShock 3 clone\n");
+        type = CONTROLLER_TYPE_PS3Controller;
+    }
+
     // If it fails, try to guess it from COD
     if (type == CONTROLLER_TYPE_Unknown || type == CONTROLLER_TYPE_UnknownNonSteamController ||
         type == CONTROLLER_TYPE_UnknownSteamController) {
