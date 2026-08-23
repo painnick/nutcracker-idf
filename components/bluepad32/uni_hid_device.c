@@ -255,6 +255,9 @@ bool uni_hid_device_set_ready_complete(uni_hid_device_t* d) {
 
     uni_bt_service_on_device_ready(d);
 
+    if (IS_ENABLED(UNI_ENABLE_BREDR) && uni_hid_device_is_incoming(d))
+        uni_bt_bredr_hid_incoming_setup(d);
+
     uni_bt_conn_set_state(&d->conn, UNI_BT_CONN_STATE_DEVICE_READY);
     return true;
 }

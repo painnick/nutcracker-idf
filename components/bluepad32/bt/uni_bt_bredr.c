@@ -8,6 +8,7 @@
 #include <stdbool.h>
 
 #include <btstack.h>
+#include <btstack_hid.h>
 
 #include "sdkconfig.h"
 
@@ -29,6 +30,110 @@
 _Static_assert(INQUIRY_REMOTE_NAME_TIMEOUT_MS < HID_DEVICE_CONNECTION_TIMEOUT_MS, "Timeout too big");
 
 static bool bt_bredr_enabled = true;
+
+/* Incoming HID setup: EXIT_SUSPEND then SET_PROTOCOL. Queued for CAN_SEND_NOW because
+ * l2cap_send returns BTSTACK_ACL_BUFFERS_FULL (0x57) if called synchronously. */
+static struct {
+    uni_hid_device_t* device;
+    uint8_t msgs[2];
+    uint8_t count;
+    uint8_t next;
+} s_hid_incoming_setup;
+
+static void uni_bt_bredr_hid_incoming_setup_reset(void) {
+    s_hid_incoming_setup.device = NULL;
+    s_hid_incoming_setup.count = 0;
+    s_hid_incoming_setup.next = 0;
+}
+
+static void uni_bt_bredr_send_control(uni_hid_device_t* d, const uint8_t* data, uint16_t len) {
+    if (d == NULL || d->conn.control_cid == 0 || data == NULL || len == 0)
+        return;
+    int err = l2cap_send(d->conn.control_cid, (uint8_t*)data, len);
+    if (err == BTSTACK_ACL_BUFFERS_FULL) {
+        l2cap_request_can_send_now_event(d->conn.control_cid);
+        return;
+    }
+    if (err)
+        loge("HID control send failed (cid=0x%04x): 0x%04x\n", d->conn.control_cid, err);
+}
+
+static void uni_bt_bredr_send_handshake(uni_hid_device_t* d, hid_handshake_param_type_t status) {
+    uint8_t msg = (uint8_t)((HID_MESSAGE_TYPE_HANDSHAKE << 4) | (status & 0x0F));
+    uni_bt_bredr_send_control(d, &msg, 1);
+}
+
+void uni_bt_bredr_hid_incoming_setup(uni_hid_device_t* d) {
+    if (d == NULL || !uni_hid_device_is_incoming(d) || d->conn.control_cid == 0)
+        return;
+
+    logi("HID incoming setup for %s: EXIT_SUSPEND + SET_PROTOCOL(REPORT)\n", bd_addr_to_str(d->conn.btaddr));
+
+    s_hid_incoming_setup.device = d;
+    s_hid_incoming_setup.msgs[0] = (uint8_t)((HID_MESSAGE_TYPE_HID_CONTROL << 4) | HID_CONTROL_PARAM_EXIT_SUSPEND);
+    s_hid_incoming_setup.msgs[1] = (uint8_t)((HID_MESSAGE_TYPE_SET_PROTOCOL << 4) | HID_PROTOCOL_MODE_REPORT);
+    s_hid_incoming_setup.count = 2;
+    s_hid_incoming_setup.next = 0;
+    l2cap_request_can_send_now_event(d->conn.control_cid);
+}
+
+void uni_bt_bredr_on_can_send_now(uni_hid_device_t* d, uint16_t local_cid) {
+    if (d == NULL)
+        return;
+
+    if (s_hid_incoming_setup.device == d && local_cid == d->conn.control_cid &&
+        s_hid_incoming_setup.next < s_hid_incoming_setup.count) {
+        uint8_t msg = s_hid_incoming_setup.msgs[s_hid_incoming_setup.next];
+        int err = l2cap_send(local_cid, &msg, 1);
+        if (err == BTSTACK_ACL_BUFFERS_FULL) {
+            l2cap_request_can_send_now_event(local_cid);
+            return;
+        }
+        if (err) {
+            loge("HID incoming setup send failed (cid=0x%04x): 0x%04x\n", local_cid, err);
+            uni_bt_bredr_hid_incoming_setup_reset();
+            return;
+        }
+        s_hid_incoming_setup.next++;
+        if (s_hid_incoming_setup.next < s_hid_incoming_setup.count) {
+            l2cap_request_can_send_now_event(local_cid);
+        } else {
+            logi("HID incoming setup complete for %s\n", bd_addr_to_str(d->conn.btaddr));
+            uni_bt_bredr_hid_incoming_setup_reset();
+        }
+    }
+}
+
+static void uni_bt_bredr_handle_control_channel(uni_hid_device_t* d, const uint8_t* packet, uint16_t size) {
+    if (size < 1)
+        return;
+
+    hid_message_type_t msg_type = (hid_message_type_t)(packet[0] >> 4);
+    switch (msg_type) {
+        case HID_MESSAGE_TYPE_HANDSHAKE:
+            logi("HID handshake on control: status=0x%01x (%s)\n", packet[0] & 0x0F, bd_addr_to_str(d->conn.btaddr));
+            break;
+        case HID_MESSAGE_TYPE_HID_CONTROL:
+            logd("HID control param: 0x%01x (%s)\n", packet[0] & 0x0F, bd_addr_to_str(d->conn.btaddr));
+            break;
+        case HID_MESSAGE_TYPE_SET_REPORT:
+        case HID_MESSAGE_TYPE_SET_PROTOCOL:
+        case HID_MESSAGE_TYPE_GET_REPORT:
+        case HID_MESSAGE_TYPE_GET_PROTOCOL:
+        case HID_MESSAGE_TYPE_SET_IDLE_DEPRECATED:
+        case HID_MESSAGE_TYPE_GET_IDLE_DEPRECATED:
+            /* Cheap Android pads sometimes send host-role messages on control. Ack anyway. */
+            uni_bt_bredr_send_handshake(d, HID_HANDSHAKE_PARAM_TYPE_SUCCESSFUL);
+            break;
+        case HID_MESSAGE_TYPE_DATA:
+            if (d->report_parser.parse_feature_report)
+                d->report_parser.parse_feature_report(d, &packet[1], size - 1);
+            break;
+        default:
+            logd("HID control channel: unhandled type 0x%x (%s)\n", msg_type, bd_addr_to_str(d->conn.btaddr));
+            break;
+    }
+}
 
 static void l2cap_create_control_connection(uni_hid_device_t* d) {
     uint8_t status;
@@ -358,21 +463,20 @@ void uni_bt_bredr_on_l2cap_incoming_connection(uint16_t channel, const uint8_t* 
 
     device = uni_hid_device_get_instance_for_address(event_addr);
 
+    /* Incoming pads (ShanWan 1949:0402, Xbox Wireless, …) often open L2CAP again after
+     * SDP / while uni_hid_device_set_ready_complete() runs. Accepting duplicates overwrites
+     * control_cid/interrupt_cid and the pad closes the original interrupt channel.
+     * Decline whenever both HID channels are already up; state may still be PENDING_READY. */
+    if (device && uni_bt_conn_is_connected(&device->conn) && device->conn.control_cid != 0 &&
+        device->conn.interrupt_cid != 0) {
+        logi("Device %s already has active HID channels (state=%d), declining incoming L2CAP (psm=0x%04x)\n",
+             bd_addr_to_str(event_addr), device->conn.state, psm);
+        l2cap_decline_connection(channel);
+        return;
+    }
+
     if (device && device->conn.state == UNI_BT_CONN_STATE_DEVICE_READY) {
-        // It could happen that a device "disconnects" without actually sending the
-        // disconnect packet. So Bluepad32 thinks it is connected, while the gamepad not.
-        // And if the gamepad tries to connect again, it will "conflict" the Bluepad32 state.
-        // E.g: Xbox Wireless m1708 behaves like this
-        //
-        // Xbox Wireless also opens a second L2CAP control channel while the existing HID
-        // channels are still active. Tearing down a healthy session breaks the link.
-        if (uni_bt_conn_is_connected(&device->conn) && device->conn.control_cid != 0 &&
-            device->conn.interrupt_cid != 0) {
-            logi("Device %s already ready with active channels, declining incoming L2CAP (psm=0x%04x)\n",
-                 bd_addr_to_str(event_addr), psm);
-            l2cap_decline_connection(channel);
-            return;
-        }
+        // Ghost slot: marked ready but channels are gone; tear down before re-connect.
         logi("Device %s with an existing connection, disconnecting current connection\n", bd_addr_to_str(event_addr));
         uni_hid_device_disconnect(device);
         uni_hid_device_delete(device);
@@ -493,6 +597,8 @@ void uni_bt_bredr_on_l2cap_channel_closed(uint16_t channel, const uint8_t* packe
         logi("Couldn't not find hid_device for cid = 0x%04x\n", local_cid);
         return;
     }
+    if (s_hid_incoming_setup.device == device)
+        uni_bt_bredr_hid_incoming_setup_reset();
     uni_hid_device_disconnect(device);
     uni_hid_device_delete(device);
     /* device is destroyed after this call, don't use it */
@@ -516,10 +622,7 @@ void uni_bt_bredr_on_l2cap_data_packet(uint16_t channel, const uint8_t* packet, 
     }
 
     if (channel == d->conn.control_cid) {
-        // Feature report
-        if (d->report_parser.parse_feature_report)
-            // Skip the first byte which must be 0xa3
-            d->report_parser.parse_feature_report(d, &packet[1], size - 1);
+        uni_bt_bredr_handle_control_channel(d, packet, size);
         return;
     }
 

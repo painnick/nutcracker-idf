@@ -473,6 +473,8 @@ void uni_bt_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t* packe
                     if (device == NULL) {
                         loge("--->>> CANNOT FIND DEVICE");
                     } else {
+                        if (IS_ENABLED(UNI_ENABLE_BREDR))
+                            uni_bt_bredr_on_can_send_now(device, local_cid);
                         uni_hid_device_send_queued_reports(device);
                     }
                     break;

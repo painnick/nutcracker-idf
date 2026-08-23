@@ -33,6 +33,8 @@ bool uni_bt_bredr_is_enabled(void);
 
 void uni_bt_bredr_l2cap_create_control_connection(uni_hid_device_t* d);
 void uni_bt_bredr_process_fsm(uni_hid_device_t* d);
+void uni_bt_bredr_hid_incoming_setup(uni_hid_device_t* d);
+void uni_bt_bredr_on_can_send_now(uni_hid_device_t* d, uint16_t local_cid);
 
 void uni_bt_bredr_on_l2cap_incoming_connection(uint16_t channel, const uint8_t* packet, uint16_t size);
 void uni_bt_bredr_on_l2cap_channel_opened(uint16_t channel, const uint8_t* packet, uint16_t size);
