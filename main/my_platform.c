@@ -103,10 +103,13 @@ static void waiting_idle_cb(void *arg) {
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
 }
 
-/* 연결 효과음. stop 직후 바로 play하면 DFPlayer가 무시하므로 잠깐 뒤에 낸다.
-   on_device_ready에서 vTaskDelay로 기다리면 btstack 런루프가 멈추므로 타이머로 미룬다. */
+/* 연결 효과음. btstack 스레드(on_device_ready)에서 UART를 쓰면 링크가 끊길 수 있어
+   esp_timer 태스크에서 stop/play 한다. stop 직후 바로 play하면 DFPlayer가 무시하므로
+   그 사이에 vTaskDelay를 둔다. */
 static void connect_sound_cb(void *arg) {
     (void)arg;
+    rccar_dfplayer_stop();
+    vTaskDelay(pdMS_TO_TICKS(100));
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
 }
 
@@ -455,7 +458,6 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
         xQueueReset(input_queue);
 
     esp_timer_stop(waiting_idle_timer);
-    rccar_dfplayer_stop();
     esp_timer_stop(connect_sound_timer);
     esp_timer_start_once(connect_sound_timer, 100 * 1000);
 
