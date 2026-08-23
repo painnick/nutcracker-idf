@@ -5,6 +5,7 @@ set(srcs
     rccar_servo.c
     rccar_shiftreg.c
     rccar_led.c
+    rccar_humidifier.c
     rccar_dfplayer.c
     rccar_storage.c
 )

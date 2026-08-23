@@ -23,6 +23,7 @@
 #include "rccar.h"
 #include "rccar_dfplayer.h"
 #include "rccar_drive.h"
+#include "rccar_humidifier.h"
 #include "rccar_led.h"
 #include "rccar_motor.h"
 #include "rccar_servo.h"
@@ -35,6 +36,7 @@
 #define DEBOUNCE_MS 100
 #define WARM_WHITE_DEBOUNCE_MS 400
 #define SELECT_START_HOLD_MS 3000
+#define HUMIDIFIER_PULSE_ON_MS 5000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
 #define STICK_VX_SIGN (-1) /* axis_y: invert so stick-up = forward */
@@ -233,11 +235,15 @@ static void input_process_task(void *arg) {
             }
         }
 
-        /* X edge: radar armed toggle */
+        /* X edge: kingtiger1.1 가습기 펄스 OFF, 그 외 레이더 무장/해제 */
         if (evt.buttons & BUTTON_X) {
             if (!(prev_buttons & BUTTON_X)) {
-                s_radar_armed = !s_radar_armed;
-                rccar_radar_set_armed(s_radar_armed);
+                if (rccar_humidifier_available()) {
+                    rccar_humidifier_pulse_on_ms(HUMIDIFIER_PULSE_ON_MS);
+                } else {
+                    s_radar_armed = !s_radar_armed;
+                    rccar_radar_set_armed(s_radar_armed);
+                }
             }
         }
 

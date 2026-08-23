@@ -13,9 +13,10 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | :--- | :--- |
 | 홀로노믹 주행 | 좌 스틱 XY + 우 스틱 X → 4휠 DRV8833 (MCPWM, 소프트 램프) |
 | 포탑 회전 | D-Pad 좌/우 → DRV8833 3번째 칩 (MCPWM) |
-| 레이더 | 연속 회전 서보 (LEDC). X 버튼으로 무장/해제 |
+| 레이더 | 연속 회전 서보 (LEDC). nutcracker1.0: X 버튼 무장/해제 |
 | 효과 LED | 74HC595 ×4 데이지체인 (32채널, v1은 드라이버 + 테스트 패턴) |
 | 웜 화이트 | MOSFET 1채널, Y 버튼 온/오프 토글 |
+| 가습기 | kingtiger1.1: GPIO13, 부팅 시 OFF, X 버튼으로 5초 ON 후 자동 OFF |
 | 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
 | 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지, 레이더 해제 |
 | 패드 피드백 | 연결 시 진동, 상태별 효과음 (IDLE / CONNECT) |
@@ -51,6 +52,7 @@ v1에서 제외: 주포/기관총 발사 시퀀스, 포신 상하/반동 서보,
 | 595 DATA (SER) | 23 | NC | 시프트 LED (kingtiger1.1 미장착) |
 | 595 CLOCK (SRCLK) | 18 | NC | 시프트 LED (kingtiger1.1 미장착) |
 | 595 LATCH (RCLK) | 19 | NC | 시프트 LED (kingtiger1.1 미장착) |
+| 가습기 MOSFET/릴레이 | NC | 13 | kingtiger1.1 전용, HIGH=ON |
 
 ## 게임패드 조작
 
@@ -60,7 +62,7 @@ v1에서 제외: 주포/기관총 발사 시퀀스, 포신 상하/반동 서보,
 | 우 스틱 X | 요 회전 |
 | D-Pad 좌/우 | 포탑 회전 |
 | Y | 웜 화이트 MOSFET 토글 |
-| X | 레이더 무장/해제 (고정 속도 회전) |
+| X | kingtiger1.1: 가습기 5초 ON 후 자동 OFF / nutcracker1.0: 레이더 무장·해제 |
 | L1 / R1 | 볼륨 감소 / 증가 (NVS 저장) |
 | Select + Start (3초) | NVS 설정 초기화 후 재시작 |
 | 연결 해제 또는 약 1초 리포트 없음 | 페일세이프: 전 모터 0, 레이더 정지 |

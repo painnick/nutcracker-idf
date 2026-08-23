@@ -48,6 +48,9 @@ extern "C" {
 #define RCCAR_PIN_595_CLOCK (GPIO_NUM_NC)
 #define RCCAR_PIN_595_LATCH (GPIO_NUM_NC)
 
+/* 가습기 모듈 (MOSFET/릴레이, HIGH=ON) */
+#define RCCAR_PIN_HUMIDIFIER (GPIO_NUM_13)
+
 #elif defined(CONFIG_RCCAR_BOARD_NUTCRACKER_1_0)
 
 /* ===== nutcracker1.0 ===== */
@@ -82,6 +85,8 @@ extern "C" {
 #define RCCAR_PIN_595_DATA  (GPIO_NUM_23)
 #define RCCAR_PIN_595_CLOCK (GPIO_NUM_18)
 #define RCCAR_PIN_595_LATCH (GPIO_NUM_19)
+
+#define RCCAR_PIN_HUMIDIFIER (GPIO_NUM_NC)
 
 #else
 #error "RCCAR board variant not selected (CONFIG_RCCAR_BOARD_*)"

@@ -11,6 +11,7 @@
 #include "esp_log.h"
 
 #include "rccar_dfplayer.h"
+#include "rccar_humidifier.h"
 #include "rccar_led.h"
 #include "rccar_motor.h"
 #include "rccar_servo.h"
@@ -33,6 +34,7 @@ esp_err_t rccar_init(void)
     ESP_RETURN_ON_ERROR(rccar_servo_init(), TAG, "servo");
     ESP_RETURN_ON_ERROR(rccar_shiftreg_init(), TAG, "shiftreg");
     ESP_RETURN_ON_ERROR(rccar_led_init(), TAG, "led");
+    ESP_RETURN_ON_ERROR(rccar_humidifier_init(), TAG, "humidifier");
 
     /* DFPlayer는 여기서 초기화하지 않는다. rccar_init은 my_platform_init에서,
        즉 uni_init() 도중에 불린다. UART 드라이버 설치와 200ms 대기를 BT 스택
