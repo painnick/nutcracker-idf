@@ -12,9 +12,11 @@
 #include <btstack_run_loop.h>
 #include <platform/uni_platform.h>
 #include <uni.h>
+#include "controller/uni_balance_board.h"
 #include "controller/uni_controller.h"
 #include "controller/uni_controller_type.h"
 #include "controller/uni_gamepad.h"
+#include "uni_common.h"
 
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -54,6 +56,11 @@
 /* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
 #define GAMEPAD_EFFECT_DELAY_MS 500
 #define GAMEPAD_KEEPALIVE_MS 4000
+/* Balance Board: CoG 민감도 (grams). 값을 낮출수록 적은 체중 이동에도 반응한다. */
+#define BB_MOVE_THRESHOLD 800
+#define BB_COG_SCALE_RANGE 2200
+#define BB_SMOOTH_NUM 12
+#define BB_SMOOTH_DEN 100
 
 /* 연결이 끊긴 뒤 스캔을 다시 켜기까지의 유예. inquiry는 BR/EDR 대역을 크게
    점유해서, 컨트롤러가 스스로 재연결하려는 순간에 켜면 그 절차를 방해한다.
@@ -62,6 +69,7 @@
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
+    uni_balance_board_state_t bb_state;
 } my_platform_instance_t;
 
 typedef struct {
@@ -216,6 +224,49 @@ static int32_t clamp_axis(int32_t v) {
     if (v < -512)
         return -512;
     return v;
+}
+
+static int32_t bb_apply_move_threshold(int32_t cog, int move_threshold) {
+    if (cog > move_threshold)
+        return cog - move_threshold;
+    if (cog < -move_threshold)
+        return cog + move_threshold;
+    return 0;
+}
+
+static void bb_smooth_cog(const uni_balance_board_t *bb, uni_balance_board_state_t *state) {
+    state->smooth_down = mult_frac((bb->bl + bb->br) - state->smooth_down, BB_SMOOTH_NUM, BB_SMOOTH_DEN);
+    state->smooth_top = mult_frac((bb->tl + bb->tr) - state->smooth_top, BB_SMOOTH_NUM, BB_SMOOTH_DEN);
+    state->smooth_left = mult_frac((bb->tl + bb->bl) - state->smooth_left, BB_SMOOTH_NUM, BB_SMOOTH_DEN);
+    state->smooth_right = mult_frac((bb->tr + bb->br) - state->smooth_right, BB_SMOOTH_NUM, BB_SMOOTH_DEN);
+}
+
+/* Wii Balance Board: 4코너 무게(grams) → 무게 중심 → axis_x/axis_y (게임패드와 동일 경로). */
+static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
+                                        uni_balance_board_state_t *state,
+                                        int32_t *out_x,
+                                        int32_t *out_y) {
+    *out_x = 0;
+    *out_y = 0;
+
+    if (bb->tl < UNI_BALANCE_BOARD_IDLE_THRESHOLD && bb->tr < UNI_BALANCE_BOARD_IDLE_THRESHOLD &&
+        bb->bl < UNI_BALANCE_BOARD_IDLE_THRESHOLD && bb->br < UNI_BALANCE_BOARD_IDLE_THRESHOLD) {
+        memset(state, 0, sizeof(*state));
+        return;
+    }
+
+    bb_smooth_cog(bb, state);
+
+    int32_t cog_x = state->smooth_right - state->smooth_left;
+    int32_t cog_y = state->smooth_down - state->smooth_top;
+
+    cog_x = bb_apply_move_threshold(cog_x, BB_MOVE_THRESHOLD);
+    cog_y = bb_apply_move_threshold(cog_y, BB_MOVE_THRESHOLD);
+
+    if (cog_x != 0)
+        *out_x = clamp_axis((cog_x * AXIS_MAX) / BB_COG_SCALE_RANGE);
+    if (cog_y != 0)
+        *out_y = clamp_axis((cog_y * AXIS_MAX) / BB_COG_SCALE_RANGE);
 }
 
 static void failsafe_stop(void) {
@@ -529,6 +580,10 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     }
     my_platform_instance_t *ins = get_my_platform_instance(d);
     ins->gamepad_seat = GAMEPAD_SEAT_A;
+    memset(&ins->bb_state, 0, sizeof(ins->bb_state));
+
+    if (d->controller_subtype == CONTROLLER_SUBTYPE_WII_BALANCE_BOARD)
+        logi("custom: Wii Balance Board ready\n");
 
     /* Ensure motors stopped / soft state consistent before accepting input */
     rccar_motor_all_stop();
@@ -553,27 +608,38 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
 }
 
 static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t *ctl) {
-    if (ctl->klass != UNI_CONTROLLER_CLASS_GAMEPAD)
-        return;
-
     if (!s_connected || input_queue == NULL)
         return;
 
-    uint16_t buttons = ctl->gamepad.buttons;
-    if ((buttons & BUTTON_X) && !(s_gamepad_prev_buttons & BUTTON_X))
-        handle_x_button_press(d);
-    s_gamepad_prev_buttons = buttons;
-
     input_event_t evt = {
-        .axis_x = ctl->gamepad.axis_x,
-        .axis_y = ctl->gamepad.axis_y,
-        .axis_rx = ctl->gamepad.axis_rx,
-        .dpad = ctl->gamepad.dpad,
-        .buttons = buttons,
-        .misc_buttons = ctl->gamepad.misc_buttons,
         .device = d,
         .timestamp_ms = esp_timer_get_time() / 1000,
     };
+
+    switch (ctl->klass) {
+        case UNI_CONTROLLER_CLASS_GAMEPAD: {
+            uint16_t buttons = ctl->gamepad.buttons;
+            if ((buttons & BUTTON_X) && !(s_gamepad_prev_buttons & BUTTON_X))
+                handle_x_button_press(d);
+            s_gamepad_prev_buttons = buttons;
+
+            evt.axis_x = ctl->gamepad.axis_x;
+            evt.axis_y = ctl->gamepad.axis_y;
+            evt.axis_rx = ctl->gamepad.axis_rx;
+            evt.dpad = ctl->gamepad.dpad;
+            evt.buttons = buttons;
+            evt.misc_buttons = ctl->gamepad.misc_buttons;
+            break;
+        }
+        case UNI_CONTROLLER_CLASS_BALANCE_BOARD: {
+            my_platform_instance_t *ins = get_my_platform_instance(d);
+            balance_board_to_stick_axes(&ctl->balance_board, &ins->bb_state, &evt.axis_x, &evt.axis_y);
+            evt.axis_rx = 0;
+            break;
+        }
+        default:
+            return;
+    }
 
     xQueueOverwrite(input_queue, &evt);
 }
