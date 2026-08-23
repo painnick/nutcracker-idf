@@ -36,7 +36,10 @@
 #define DEBOUNCE_MS 100
 #define WARM_WHITE_DEBOUNCE_MS 400
 #define SELECT_START_HOLD_MS 3000
-#define HUMIDIFIER_PULSE_ON_MS 5000
+#define X_RUMBLE_DURATION_MS 150
+#define X_RUMBLE_WEAK 128
+#define X_RUMBLE_STRONG 40
+#define HUMIDIFIER_PULSE_ON_MS 3000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
 #define STICK_VX_SIGN (-1) /* axis_y: invert so stick-up = forward */
@@ -71,6 +74,7 @@ typedef struct {
 } input_event_t;
 
 static void trigger_event_on_gamepad(uni_hid_device_t *d);
+static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t weak, uint8_t strong);
 static my_platform_instance_t *get_my_platform_instance(uni_hid_device_t *d);
 
 static QueueHandle_t input_queue = NULL;
@@ -79,6 +83,7 @@ static esp_timer_handle_t waiting_idle_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
 static esp_timer_handle_t gamepad_effect_timer = NULL;
 static esp_timer_handle_t scan_restart_timer = NULL;
+static esp_timer_handle_t humidifier_pulse_timer = NULL;
 static volatile bool s_radar_armed = false;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
@@ -89,13 +94,24 @@ static volatile bool s_connected = false;
 static btstack_context_callback_registration_t rumble_request;
 static btstack_context_callback_registration_t gamepad_effect_request;
 static uni_hid_device_t *volatile rumble_device = NULL;
+static uint16_t volatile rumble_duration_ms = X_RUMBLE_DURATION_MS;
+static uint8_t volatile rumble_weak = X_RUMBLE_WEAK;
+static uint8_t volatile rumble_strong = X_RUMBLE_STRONG;
 static uni_hid_device_t *volatile gamepad_effect_device = NULL;
 
+static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t weak, uint8_t strong) {
+    rumble_device = d;
+    rumble_duration_ms = duration_ms;
+    rumble_weak = weak;
+    rumble_strong = strong;
+    btstack_run_loop_execute_on_main_thread(&rumble_request);
+}
+
 static void rumble_on_btstack_thread(void *context) {
-    // (void)context;
-    // uni_hid_device_t *d = rumble_device;
-    // if (d != NULL && d->report_parser.play_dual_rumble != NULL)
-    //     d->report_parser.play_dual_rumble(d, 0, 800, 255, 255);
+    (void)context;
+    uni_hid_device_t *d = rumble_device;
+    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+        d->report_parser.play_dual_rumble(d, 0, rumble_duration_ms, rumble_weak, rumble_strong);
 }
 
 static void waiting_idle_cb(void *arg) {
@@ -136,6 +152,12 @@ static void gamepad_effect_cb(void *arg) {
 static void delayed_restart_cb(void *arg) {
     (void)arg;
     rccar_storage_erase_and_restart();
+}
+
+static void humidifier_pulse_cb(void *arg) {
+    (void)arg;
+    if (rccar_humidifier_available())
+        rccar_humidifier_pulse_on_ms(HUMIDIFIER_PULSE_ON_MS);
 }
 
 static int32_t clamp_axis(int32_t v) {
@@ -238,14 +260,13 @@ static void input_process_task(void *arg) {
             }
         }
 
-        /* X edge: kingtiger1.1 가습기 펄스 OFF, 그 외 레이더 무장/해제 */
+        /* X edge: rumble, then humidifier pulse (kingtiger1.1) */
         if (evt.buttons & BUTTON_X) {
             if (!(prev_buttons & BUTTON_X)) {
+                request_rumble(evt.device, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
                 if (rccar_humidifier_available()) {
-                    rccar_humidifier_pulse_on_ms(HUMIDIFIER_PULSE_ON_MS);
-                } else {
-                    s_radar_armed = !s_radar_armed;
-                    rccar_radar_set_armed(s_radar_armed);
+                    esp_timer_stop(humidifier_pulse_timer);
+                    esp_timer_start_once(humidifier_pulse_timer, (uint64_t)X_RUMBLE_DURATION_MS * 1000ULL);
                 }
             }
         }
@@ -283,8 +304,7 @@ static void input_process_task(void *arg) {
                 select_start_pressed_at = now_ms;
             if (!select_start_fired && now_ms - select_start_pressed_at >= SELECT_START_HOLD_MS) {
                 select_start_fired = true;
-                rumble_device = evt.device;
-                btstack_run_loop_execute_on_main_thread(&rumble_request);
+                request_rumble(evt.device, 800, 255, 255);
                 esp_timer_stop(restart_timer);
                 esp_timer_start_once(restart_timer, 800 * 1000);
             }
@@ -360,6 +380,14 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "scan_restart",
     };
     esp_timer_create(&scan_restart_args, &scan_restart_timer);
+
+    const esp_timer_create_args_t humidifier_pulse_args = {
+        .callback = &humidifier_pulse_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "humidifier_pulse",
+    };
+    esp_timer_create(&humidifier_pulse_args, &humidifier_pulse_timer);
 }
 
 static void my_platform_on_init_complete(void) {
@@ -427,6 +455,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     s_connected = false;
     gamepad_effect_device = NULL;
     esp_timer_stop(gamepad_effect_timer);
+    esp_timer_stop(humidifier_pulse_timer);
     failsafe_stop();
     if (input_queue != NULL)
         xQueueReset(input_queue);
