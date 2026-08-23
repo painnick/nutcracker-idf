@@ -363,6 +363,16 @@ void uni_bt_bredr_on_l2cap_incoming_connection(uint16_t channel, const uint8_t* 
         // disconnect packet. So Bluepad32 thinks it is connected, while the gamepad not.
         // And if the gamepad tries to connect again, it will "conflict" the Bluepad32 state.
         // E.g: Xbox Wireless m1708 behaves like this
+        //
+        // Xbox Wireless also opens a second L2CAP control channel while the existing HID
+        // channels are still active. Tearing down a healthy session breaks the link.
+        if (uni_bt_conn_is_connected(&device->conn) && device->conn.control_cid != 0 &&
+            device->conn.interrupt_cid != 0) {
+            logi("Device %s already ready with active channels, declining incoming L2CAP (psm=0x%04x)\n",
+                 bd_addr_to_str(event_addr), psm);
+            l2cap_decline_connection(channel);
+            return;
+        }
         logi("Device %s with an existing connection, disconnecting current connection\n", bd_addr_to_str(event_addr));
         uni_hid_device_disconnect(device);
         uni_hid_device_delete(device);
