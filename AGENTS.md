@@ -15,6 +15,7 @@
 
 ## 빌드
 ```bat
+git submodule update --init
 env.bat
 idf.py set-target esp32
 idf.py build
@@ -28,7 +29,8 @@ idf.py flash monitor
 | `main/my_platform.c` | 패드 매핑, Core1 입력 처리, 페일세이프 |
 | `components/rccar/` | 메카넘 카 전용 (drive/motor/servo/led/595/dfplayer/storage) |
 | `components/rccar/rccar_pins.h` | 핀 맵 (설계 3.1) |
-| `components/bluepad32/`, `btstack/` | panzer4 계열 입력 스택 |
+| `components/bluepad32/` | Git submodule (`painnick/bluepad32`). IDF 컴포넌트는 `src/components/bluepad32` |
+| `components/btstack/` | panzer4 계열 BTstack (로컬 벤더) |
 | `README.md` | 사용자용 개요, 핀 맵, 조작, 빌드 |
 | `docs/superpowers/specs/` | 설계 문서 |
 | `docs/superpowers/plans/` | 구현 계획 |

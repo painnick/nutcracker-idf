@@ -112,7 +112,9 @@ nutcracker-idf/
     main.c                # BTstack + Bluepad32 부트
     my_platform.c         # 패드 이벤트, Core1 워커, 매핑, 페일세이프
   components/
-    bluepad32/ btstack/   # panzer4에서 복사
+    bluepad32/            # git submodule: painnick/bluepad32
+                          # IDF 컴포넌트는 src/components/bluepad32
+    btstack/              # panzer4에서 복사한 BTstack
     rccar/
       rccar.c / .h        # 초기화 오케스트레이션
       rccar_pins.h        # 핀 상수
@@ -128,6 +130,12 @@ nutcracker-idf/
 입력 경로: Core0 `on_controller_data` → 큐 → Core1 `input_process_task` 에서 주행/포탑/버튼/페일세이프 적용.
 
 ## 빌드
+
+클론 후 서브모듈을 먼저 받습니다.
+
+```bat
+git submodule update --init
+```
 
 Windows (프로젝트 루트):
 
