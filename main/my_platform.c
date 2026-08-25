@@ -42,6 +42,9 @@
 #define X_RUMBLE_DURATION_MS 500
 #define X_RUMBLE_WEAK 255
 #define X_RUMBLE_STRONG 255
+#define CONNECT_RUMBLE_DURATION_MS 400
+#define CONNECT_RUMBLE_WEAK 200
+#define CONNECT_RUMBLE_STRONG 200
 #define HUMIDIFIER_PULSE_ON_MS 3000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
@@ -117,6 +120,18 @@ static bool device_uses_parser_keepalive(uni_hid_device_t *d) {
     return d != NULL && d->controller_type == CONTROLLER_TYPE_XBoxOneController;
 }
 
+static bool device_wants_connect_rumble(uni_hid_device_t *d) {
+    if (d == NULL || d->report_parser.play_dual_rumble == NULL)
+        return false;
+    if (d->controller_subtype == CONTROLLER_SUBTYPE_WII_BALANCE_BOARD)
+        return false;
+    if (d->controller.klass == UNI_CONTROLLER_CLASS_BALANCE_BOARD ||
+        d->controller.klass == UNI_CONTROLLER_CLASS_KEYBOARD ||
+        d->controller.klass == UNI_CONTROLLER_CLASS_MOUSE)
+        return false;
+    return true;
+}
+
 static void handle_x_button_press(uni_hid_device_t *d) {
     if (d != NULL && d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
@@ -169,9 +184,13 @@ static void gamepad_effect_on_btstack_thread(void *context) {
     uni_hid_device_t *d = gamepad_effect_device;
     if (d != NULL) {
         trigger_event_on_gamepad(d);
-        /* DS3/Android 등: claim 출력. Xbox는 파서 keep-alive가 처리한다. */
-        if (d->report_parser.play_dual_rumble != NULL && !device_uses_parser_keepalive(d))
+        if (device_wants_connect_rumble(d)) {
+            d->report_parser.play_dual_rumble(d, 0, CONNECT_RUMBLE_DURATION_MS, CONNECT_RUMBLE_WEAK,
+                                              CONNECT_RUMBLE_STRONG);
+        } else if (d->report_parser.play_dual_rumble != NULL && !device_uses_parser_keepalive(d)) {
+            /* DS3/Android 등: claim 출력. Xbox는 파서 keep-alive가 처리한다. */
             d->report_parser.play_dual_rumble(d, 0, 0, 0, 0);
+        }
     }
 }
 
@@ -677,8 +696,6 @@ static my_platform_instance_t *get_my_platform_instance(uni_hid_device_t *d) {
 
 static void trigger_event_on_gamepad(uni_hid_device_t *d) {
     my_platform_instance_t *ins = get_my_platform_instance(d);
-    // if (d->report_parser.play_dual_rumble != NULL)
-    //     d->report_parser.play_dual_rumble(d, 0, 150, 128, 40);
     if (d->report_parser.set_player_leds != NULL)
         d->report_parser.set_player_leds(d, ins->gamepad_seat);
     if (d->report_parser.set_lightbar_color != NULL) {
