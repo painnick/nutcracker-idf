@@ -120,8 +120,15 @@ static bool device_uses_parser_keepalive(uni_hid_device_t *d) {
     return d != NULL && d->controller_type == CONTROLLER_TYPE_XBoxOneController;
 }
 
+/* BR/EDR HID는 interrupt L2CAP(cid>0)으로 출력 리포트를 보낸다. BLE HOG는 cid가 없다. */
+static bool device_supports_bredr_hid_output(uni_hid_device_t *d) {
+    return d != NULL && d->conn.interrupt_cid > 0;
+}
+
 static bool device_wants_connect_rumble(uni_hid_device_t *d) {
-    if (d == NULL || d->report_parser.play_dual_rumble == NULL)
+    if (!device_supports_bredr_hid_output(d))
+        return false;
+    if (d->report_parser.play_dual_rumble == NULL)
         return false;
     if (d->controller_subtype == CONTROLLER_SUBTYPE_WII_BALANCE_BOARD)
         return false;
@@ -133,7 +140,7 @@ static bool device_wants_connect_rumble(uni_hid_device_t *d) {
 }
 
 static void handle_x_button_press(uni_hid_device_t *d) {
-    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+    if (device_supports_bredr_hid_output(d) && d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
     if (rccar_humidifier_available()) {
         esp_timer_stop(humidifier_pulse_timer);
@@ -152,7 +159,7 @@ static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t we
 static void rumble_on_btstack_thread(void *context) {
     (void)context;
     uni_hid_device_t *d = rumble_device;
-    if (d != NULL && d->report_parser.play_dual_rumble != NULL)
+    if (device_supports_bredr_hid_output(d) && d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, rumble_duration_ms, rumble_weak, rumble_strong);
 }
 
@@ -187,7 +194,8 @@ static void gamepad_effect_on_btstack_thread(void *context) {
         if (device_wants_connect_rumble(d)) {
             d->report_parser.play_dual_rumble(d, 0, CONNECT_RUMBLE_DURATION_MS, CONNECT_RUMBLE_WEAK,
                                               CONNECT_RUMBLE_STRONG);
-        } else if (d->report_parser.play_dual_rumble != NULL && !device_uses_parser_keepalive(d)) {
+        } else if (device_supports_bredr_hid_output(d) && d->report_parser.play_dual_rumble != NULL &&
+                   !device_uses_parser_keepalive(d)) {
             /* DS3/Android 등: claim 출력. Xbox는 파서 keep-alive가 처리한다. */
             d->report_parser.play_dual_rumble(d, 0, 0, 0, 0);
         }
@@ -197,7 +205,7 @@ static void gamepad_effect_on_btstack_thread(void *context) {
 static void gamepad_keepalive_on_btstack_thread(void *context) {
     (void)context;
     uni_hid_device_t *d = keepalive_device;
-    if (d == NULL || !s_connected)
+    if (d == NULL || !s_connected || !device_supports_bredr_hid_output(d))
         return;
     if (d->report_parser.play_dual_rumble != NULL)
         d->report_parser.play_dual_rumble(d, 0, 0, 0, 0);
@@ -209,7 +217,7 @@ static void gamepad_keepalive_cb(void *arg) {
 }
 
 static void gamepad_keepalive_start(uni_hid_device_t *d) {
-    if (device_uses_parser_keepalive(d))
+    if (device_uses_parser_keepalive(d) || !device_supports_bredr_hid_output(d))
         return;
     keepalive_device = d;
     esp_timer_stop(gamepad_keepalive_timer);
