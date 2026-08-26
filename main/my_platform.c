@@ -45,6 +45,9 @@
 #define CONNECT_RUMBLE_DURATION_MS 400
 #define CONNECT_RUMBLE_WEAK 200
 #define CONNECT_RUMBLE_STRONG 200
+#define SWITCH_CONNECT_RUMBLE_DURATION_MS 600
+#define SWITCH_CONNECT_RUMBLE_WEAK 255
+#define SWITCH_CONNECT_RUMBLE_STRONG 255
 #define HUMIDIFIER_PULSE_ON_MS 3000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
@@ -125,6 +128,19 @@ static bool device_supports_bredr_hid_output(uni_hid_device_t *d) {
     return d != NULL && d->conn.interrupt_cid > 0;
 }
 
+static bool device_is_switch_gamepad(uni_hid_device_t *d) {
+    if (d == NULL)
+        return false;
+    switch (d->controller_type) {
+        case CONTROLLER_TYPE_SwitchProController:
+        case CONTROLLER_TYPE_SwitchJoyConLeft:
+        case CONTROLLER_TYPE_SwitchJoyConRight:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool device_wants_connect_rumble(uni_hid_device_t *d) {
     if (!device_supports_bredr_hid_output(d))
         return false;
@@ -192,8 +208,15 @@ static void gamepad_effect_on_btstack_thread(void *context) {
     if (d != NULL) {
         trigger_event_on_gamepad(d);
         if (device_wants_connect_rumble(d)) {
-            d->report_parser.play_dual_rumble(d, 0, CONNECT_RUMBLE_DURATION_MS, CONNECT_RUMBLE_WEAK,
-                                              CONNECT_RUMBLE_STRONG);
+            uint16_t dur = CONNECT_RUMBLE_DURATION_MS;
+            uint8_t weak = CONNECT_RUMBLE_WEAK;
+            uint8_t strong = CONNECT_RUMBLE_STRONG;
+            if (device_is_switch_gamepad(d)) {
+                dur = SWITCH_CONNECT_RUMBLE_DURATION_MS;
+                weak = SWITCH_CONNECT_RUMBLE_WEAK;
+                strong = SWITCH_CONNECT_RUMBLE_STRONG;
+            }
+            d->report_parser.play_dual_rumble(d, 0, dur, weak, strong);
         } else if (device_supports_bredr_hid_output(d) && d->report_parser.play_dual_rumble != NULL &&
                    !device_uses_parser_keepalive(d)) {
             /* DS3/Android 등: claim 출력. Xbox는 파서 keep-alive가 처리한다. */
