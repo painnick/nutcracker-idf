@@ -27,8 +27,8 @@ idf.py flash monitor
 |------|------|
 | `main/main.c` | BTstack + Bluepad32 부트 |
 | `main/my_platform.c` | 패드 매핑, Core1 입력 처리, 페일세이프 |
-| `components/rccar/` | 메카넘 카 전용 (drive/motor/servo/led/595/dfplayer/storage) |
-| `components/rccar/rccar_pins.h` | 핀 맵 (설계 3.1) |
+| `components/rccar/` | 메카넘 카 전용 (drive/motor/humidifier/dfplayer/storage) |
+| `components/rccar/rccar_pins.h` | 핀 맵 |
 | `components/bluepad32/` | Git submodule (`painnick/bluepad32`). IDF 컴포넌트는 `src/components/bluepad32` |
 | `components/btstack/` | panzer4 계열 BTstack (로컬 벤더) |
 | `README.md` | 사용자용 개요, 핀 맵, 조작, 빌드 |
@@ -37,8 +37,7 @@ idf.py flash monitor
 
 ## 하드웨어 제약 (코드 변경 시)
 - DC 모터 전부 DRV8833 + MCPWM (LEDC 금지). 그룹당 operator 3 → 휠/포탑 5채널은 group 0+1 분할.
-- 핀 변경 시 `rccar_pins.h` 의 해당 보드 변형 블록과 README 핀 맵 두 컬럼을 함께 맞출 것. 보드 변형은 Kconfig `RCCAR_BOARD` (nutcracker1.0 / kingtiger1.1, 기본 kingtiger1.1).
-- v1 제외: 주포/기관총, 포신 상하/반동, 웜 화이트 PWM, 595 최종 연출.
+- 핀 변경 시 `rccar_pins.h` 와 README 핀 맵을 함께 맞출 것.
 
 ## 스레딩 제약 (코드 변경 시)
 - Core1 `input_process_task` 에서 btstack/Bluepad32 API를 직접 호출하지 말 것. `d->report_parser.*`(럼블, LED 등)도 포함이다. btstack 타이머 리스트에는 락이 없어 Core0 런루프의 타이머 순회와 경쟁하면 리스트가 깨지고 잘못된 주소로 점프한다.

@@ -13,46 +13,32 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | :--- | :--- |
 | 홀로노믹 주행 | 좌 스틱 XY + 우 스틱 X → 4휠 DRV8833 (MCPWM, 소프트 램프) |
 | 포탑 회전 | D-Pad 좌/우 → DRV8833 3번째 칩 (MCPWM) |
-| 레이더 | 연속 회전 서보 (LEDC) |
-| 효과 LED | 74HC595 ×4 데이지체인 (32채널, v1은 드라이버 + 테스트 패턴) |
-| 웜 화이트 | MOSFET 1채널, Y 버튼 온/오프 토글 |
-| 가습기 | kingtiger1.1: GPIO13, 부팅 시 OFF (HIGH=ON) |
+| 가습기 | GPIO4, X 버튼 시 3초 ON (HIGH=ON), 부팅 시 OFF |
 | 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
-| 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지, 레이더 해제 |
+| 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지 |
 | 패드 피드백 | 연결 시 진동, 상태별 효과음 (IDLE / CONNECT) |
-
-v1에서 제외: 주포/기관총 발사 시퀀스, 포신 상하/반동 서보, 웜 화이트 PWM 디밍, 595 최종 연출 패턴.
 
 ## 핀 맵
 
-정의: `components/rccar/rccar_pins.h`. PCB 변형은 Kconfig `RCCAR_BOARD` 로 선택하며 기본값은 **kingtiger1.1** 입니다.
-
-변형 전환: `idf.py menuconfig` → "RCCAR board" → "PCB variant", 또는 `sdkconfig.defaults` 의 `CONFIG_RCCAR_BOARD_*` 를 수정.
+정의: `components/rccar/rccar_pins.h`.
 
 모터 출력에 스트래핑 위험 핀(0, 2, 12, 15)을 쓰지 않습니다.
 플래시(6-11), UART0 콘솔(1, 3), 입력 전용(34-39)은 출력에 사용하지 않습니다.
 
-`NC`는 해당 핀이 미장착이라는 뜻입니다. 핀이 `NC`인 서브시스템은 런타임에 자동으로 비활성화됩니다(초기화 건너뜀, 세터는 no-op). kingtiger1.1은 포탑과 74HC595 효과 LED가 미장착입니다.
-
-| 기능 | nutcracker1.0 | kingtiger1.1 | 블록 |
-| :--- | ---: | ---: | :--- |
-| FL IN1 | 27 | 27 | DRV8833 #1 전륜 |
-| FL IN2 | 26 | 26 | DRV8833 #1 전륜 |
-| FR IN1 | 25 | 25 | DRV8833 #1 전륜 |
-| FR IN2 | 33 | 33 | DRV8833 #1 전륜 |
-| RL IN1 | 32 | 18 | DRV8833 #2 후륜 |
-| RL IN2 | 14 | 19 | DRV8833 #2 후륜 |
-| RR IN1 | 13 | 21 | DRV8833 #2 후륜 |
-| RR IN2 | 16 | 22 | DRV8833 #2 후륜 |
-| 포탑 IN1 | 22 | NC | DRV8833 #3 (kingtiger1.1 미장착) |
-| 포탑 IN2 | 21 | NC | DRV8833 #3 (kingtiger1.1 미장착) |
-| 레이더 서보 | 17 | 17 | LEDC |
-| 웜 화이트 MOSFET 게이트 | 4 | 4 | Y 토글 |
-| DFPlayer TX | 5 | 5 | UART TX |
-| 595 DATA (SER) | 23 | NC | 시프트 LED (kingtiger1.1 미장착) |
-| 595 CLOCK (SRCLK) | 18 | NC | 시프트 LED (kingtiger1.1 미장착) |
-| 595 LATCH (RCLK) | 19 | NC | 시프트 LED (kingtiger1.1 미장착) |
-| 가습기 MOSFET/릴레이 | NC | 13 | kingtiger1.1 전용, HIGH=ON |
+| 기능 | GPIO | 블록 |
+| :--- | ---: | :--- |
+| FL IN1 | 22 | DRV8833 #1 전륜 좌 |
+| FL IN2 | 21 | DRV8833 #1 전륜 좌 |
+| FR IN1 | 18 | DRV8833 #1 전륜 우 |
+| FR IN2 | 19 | DRV8833 #1 전륜 우 |
+| RL IN1 | 25 | DRV8833 #2 후륜 좌 |
+| RL IN2 | 33 | DRV8833 #2 후륜 좌 |
+| RR IN1 | 26 | DRV8833 #2 후륜 우 |
+| RR IN2 | 27 | DRV8833 #2 후륜 우 |
+| 포탑 IN1 | 16 | DRV8833 #3 |
+| 포탑 IN2 | 17 | DRV8833 #3 |
+| 가습기 MOSFET/릴레이 | 4 | HIGH=ON |
+| DFPlayer TX | 5 | UART TX |
 
 ## 게임패드 조작
 
@@ -61,11 +47,10 @@ v1에서 제외: 주포/기관총 발사 시퀀스, 포신 상하/반동 서보,
 | 좌 스틱 X/Y | 좌우 평행이동 / 전후 |
 | 우 스틱 X | 요 회전 |
 | D-Pad 좌/우 | 포탑 회전 |
-| Y | 웜 화이트 MOSFET 토글 |
-| X | 패드 럼블 (500ms) |
+| X | 패드 럼블 (500ms) + 가습기 3초 ON |
 | L1 / R1 | 볼륨 감소 / 증가 (NVS 저장) |
 | Select + Start (3초) | NVS 설정 초기화 후 재시작 |
-| 연결 해제 또는 약 1초 리포트 없음 | 페일세이프: 전 모터 0, 레이더 정지 |
+| 연결 해제 또는 약 1초 리포트 없음 | 페일세이프: 전 모터 0 |
 | 연결 성공 | 패드 럼블 (400ms) |
 
 ### Wii Balance Board
@@ -99,8 +84,6 @@ TV 쪽이 보드 **앞(top)** 센서입니다. 앞으로 기울이면 전진, �
 
 - **DRV8833 3개**: #1 전륜(FL/FR), #2 후륜(RL/RR), #3 포탑. DC 모터는 전부 MCPWM (LEDC 사용 안 함).
 - **ESP32 MCPWM**: 그룹당 operator 최대 3. 모터 5채널은 group 0에 3개 + group 1에 2개로 배치.
-- **74HC595 ×4**: DATA/CLOCK/LATCH 만 GPIO. v1에서 **OE는 GND**(항상 enable), **MR(SRCLR)은 VCC**(하드웨어 클리어 없음). OE/MR용 GPIO는 이후 확장 가능.
-- **웜 화이트**: 595 체인에 올리지 않음. MOSFET 로우사이드(또는 하이사이드) 게이트를 GPIO 4로 온/오프.
 - **DFPlayer**: TX 전용 (GPIO 5 → 모듈 RX). 수신 핀 미사용.
 - 모터 전원과 로직 전원을 분리하고, 공통 GND를 확실히 연결할 것.
 
@@ -121,9 +104,7 @@ nutcracker-idf/
       rccar_pins.h        # 핀 상수
       rccar_drive.c       # 홀로노믹 믹스
       rccar_motor.c       # MCPWM: 휠 4 + 포탑
-      rccar_servo.c       # 연속 회전 레이더
-      rccar_shiftreg.c    # 595 체인
-      rccar_led.c         # 웜 화이트 + LED 모드
+      rccar_humidifier.c  # 가습기 GPIO
       rccar_dfplayer.c    # 사운드
       rccar_storage.c     # 볼륨 NVS
 ```
@@ -148,7 +129,7 @@ idf.py flash monitor
 ```
 
 - `env.bat` 는 Espressif IDF 설치의 `idf_cmd_init.bat` 를 호출합니다. 경로가 다르면 `env.bat` 를 수정하세요.
-- 타깃은 **ESP32 classic** (`esp32`) 입니다. S2/S3/C3 는 이 핀/MCPWM 배치를 그대로 쓰지 마세요.
+- 타깃은 **ESP32 classic** (`esp32`) 입니다. S2/S3/C3 등에서는 핀/MCPWM 배치를 그대로 쓰지 마세요.
 
 ## 설계 문서
 

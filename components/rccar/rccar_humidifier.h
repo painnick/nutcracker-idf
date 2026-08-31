@@ -1,6 +1,6 @@
 /**
  * @file rccar_humidifier.h
- * @brief 가습기 모듈 GPIO (kingtiger1.1: GPIO13, HIGH=ON)
+ * @brief 가습기 모듈 GPIO (GPIO4, HIGH=ON)
  */
 #ifndef RCCAR_HUMIDIFIER_H
 #define RCCAR_HUMIDIFIER_H
@@ -13,9 +13,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/** @brief kingtiger1.1 등 가습기 핀이 장착된 보드이면 true */
-bool rccar_humidifier_available(void);
 
 esp_err_t rccar_humidifier_init(void);
 

@@ -1,6 +1,6 @@
 /**
  * @file rccar_humidifier.c
- * @brief 가습기 모듈 GPIO (kingtiger1.1 전용, HIGH=ON)
+ * @brief 가습기 모듈 GPIO (GPIO4, HIGH=ON)
  */
 #include "rccar_humidifier.h"
 #include "rccar_pins.h"
@@ -17,7 +17,6 @@ static esp_timer_handle_t s_restore_timer = NULL;
 
 static void apply_gpio(bool on)
 {
-    /* 모듈 active-high: ON=1, OFF=0 */
     gpio_set_level(RCCAR_PIN_HUMIDIFIER, on ? 1 : 0);
 }
 
@@ -27,20 +26,8 @@ static void restore_timer_cb(void *arg)
     rccar_humidifier_set(false);
 }
 
-bool rccar_humidifier_available(void)
-{
-#if defined(CONFIG_RCCAR_BOARD_KINGTIGER_1_1)
-    return RCCAR_PIN_HUMIDIFIER != GPIO_NUM_NC;
-#else
-    return false;
-#endif
-}
-
 esp_err_t rccar_humidifier_init(void)
 {
-    if (!rccar_humidifier_available()) {
-        return ESP_OK;
-    }
     if (s_inited) {
         return ESP_OK;
     }
