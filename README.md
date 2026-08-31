@@ -14,6 +14,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 홀로노믹 주행 | 좌 스틱 XY + 우 스틱 X → 4휠 DRV8833 (MCPWM, 소프트 램프) |
 | 포탑 회전 | D-Pad 좌/우 → DRV8833 3번째 칩 (MCPWM) |
 | 가습기 | GPIO4, X 버튼 시 3초 ON (HIGH=ON), 부팅 시 OFF |
+| 네오픽셀 | WS2812 4개 (GPIO13), Y 버튼 엔진 idle 효과 토글 |
 | 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
 | 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지 |
 | 패드 피드백 | 연결 시 진동, 상태별 효과음 (IDLE / CONNECT) |
@@ -38,6 +39,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 포탑 IN1 | 16 | DRV8833 #3 |
 | 포탑 IN2 | 17 | DRV8833 #3 |
 | 가습기 MOSFET/릴레이 | 4 | HIGH=ON |
+| 네오픽셀 DATA | 13 | WS2812 x4 |
 | DFPlayer TX | 5 | UART TX |
 
 ## 게임패드 조작
@@ -48,6 +50,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 우 스틱 X | 요 회전 |
 | D-Pad 좌/우 | 포탑 회전 |
 | X | 패드 럼블 (500ms) + 가습기 3초 ON |
+| Y | 네오픽셀 엔진 idle 효과 ON/OFF 토글 |
 | L1 / R1 | 볼륨 감소 / 증가 (NVS 저장) |
 | Select + Start (3초) | NVS 설정 초기화 후 재시작 |
 | 연결 해제 또는 약 1초 리포트 없음 | 페일세이프: 전 모터 0 |
@@ -105,6 +108,7 @@ nutcracker-idf/
       rccar_drive.c       # 홀로노믹 믹스
       rccar_motor.c       # MCPWM: 휠 4 + 포탑
       rccar_humidifier.c  # 가습기 GPIO
+      rccar_neopixel.c   # WS2812 엔진 효과
       rccar_dfplayer.c    # 사운드
       rccar_storage.c     # 볼륨 NVS
 ```

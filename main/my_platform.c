@@ -28,6 +28,7 @@
 #include "rccar_drive.h"
 #include "rccar_humidifier.h"
 #include "rccar_motor.h"
+#include "rccar_neopixel.h"
 #include "rccar_storage.h"
 
 #define AXIS_MAX 512
@@ -35,6 +36,7 @@
 #define FAILSAFE_MS 1000
 #define TURRET_SPEED 511
 #define DEBOUNCE_MS 100
+#define NEOPIXEL_DEBOUNCE_MS 400
 #define SELECT_START_HOLD_MS 3000
 #define X_RUMBLE_DURATION_MS 500
 #define X_RUMBLE_WEAK 255
@@ -314,6 +316,7 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
 
 static void failsafe_stop(void) {
     rccar_motor_all_stop();
+    rccar_neopixel_set_enabled(false);
 }
 
 static void input_process_task(void *arg) {
@@ -321,8 +324,10 @@ static void input_process_task(void *arg) {
 
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
+    static int64_t last_y_ms = 0;
     static int64_t select_start_pressed_at = 0;
     static bool select_start_fired = false;
+    static uint16_t prev_buttons = 0;
     static int64_t last_input_ms = 0;
     static bool failsafe_active = true;
 
@@ -335,6 +340,7 @@ static void input_process_task(void *arg) {
         /* Disconnect / not ready: never re-drive from stale queue samples */
         if (!s_connected) {
             last_input_ms = 0;
+            prev_buttons = 0;
             select_start_pressed_at = 0;
             select_start_fired = false;
             if (!failsafe_active) {
@@ -391,6 +397,14 @@ static void input_process_task(void *arg) {
             turret = TURRET_SPEED;
         rccar_motor_turret_set(turret);
 
+        /* Y edge: 네오픽셀 엔진 효과 토글 */
+        if ((evt.buttons & BUTTON_Y) && !(prev_buttons & BUTTON_Y)) {
+            if (now_ms - last_y_ms >= NEOPIXEL_DEBOUNCE_MS) {
+                last_y_ms = now_ms;
+                rccar_neopixel_toggle();
+            }
+        }
+
         /* L1 / R1: volume - / + */
         if (evt.buttons & BUTTON_SHOULDER_L) {
             if (now_ms - last_l1_ms >= DEBOUNCE_MS) {
@@ -433,6 +447,7 @@ static void input_process_task(void *arg) {
             select_start_fired = false;
         }
 
+        prev_buttons = evt.buttons;
     }
 }
 
