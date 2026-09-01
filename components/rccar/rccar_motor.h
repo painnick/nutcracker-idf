@@ -5,6 +5,8 @@
 #ifndef RCCAR_MOTOR_H
 #define RCCAR_MOTOR_H
 
+#include <stdbool.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -34,6 +36,15 @@ void rccar_motor_turret_set(int speed);
  * @brief 전 모터 즉시 정지 (휠 + 포탑)
  */
 void rccar_motor_all_stop(void);
+
+/**
+ * @brief 4휠 개별 순차 테스트 시작 (FL → FR → RL → RR, 비동기 태스크)
+ * @note 이미 실행 중이면 무시한다.
+ */
+void rccar_motor_wheel_test_start(void);
+
+/** @brief 개별 휠 테스트 실행 중 여부 */
+bool rccar_motor_wheel_test_is_running(void);
 
 #ifdef __cplusplus
 }

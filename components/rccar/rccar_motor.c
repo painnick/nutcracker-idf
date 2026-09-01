@@ -12,9 +12,11 @@
 #include "driver/mcpwm_prelude.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 static const char *TAG = "rccar_motor";
 
@@ -28,6 +30,8 @@ static const char *TAG = "rccar_motor";
 /* 0이 아닌 명령의 최소 듀티. 정지 마찰을 이기지 못해 웅웅거리는 것을 막는다. */
 #define WHEEL_MIN_SPEED      448
 
+#define WHEEL_LOG_INTERVAL_MS 300
+
 enum {
     WHEEL_FL = 0,
     WHEEL_FR,
@@ -35,6 +39,8 @@ enum {
     WHEEL_RR,
     WHEEL_COUNT
 };
+
+static const char *WHEEL_NAME[WHEEL_COUNT] = { "FL", "FR", "RL", "RR" };
 
 enum {
     MOTOR_FL = 0,
@@ -56,6 +62,22 @@ static mcpwm_timer_handle_t s_timer1 = NULL;
 
 static SemaphoreHandle_t s_motor_mutex = NULL;
 static bool s_inited = false;
+
+#define WHEEL_TEST_SPEED     400
+#define WHEEL_TEST_RUN_MS    1500
+#define WHEEL_TEST_GAP_MS    500
+#define WHEEL_TEST_STACK     3072
+#define WHEEL_TEST_PRIO      5
+
+static TaskHandle_t s_wheel_test_task = NULL;
+static volatile bool s_wheel_test_active = false;
+
+static const int WHEEL_TEST_GPIO[WHEEL_COUNT][2] = {
+    { RCCAR_PIN_FL_IN1, RCCAR_PIN_FL_IN2 },
+    { RCCAR_PIN_FR_IN1, RCCAR_PIN_FR_IN2 },
+    { RCCAR_PIN_RL_IN1, RCCAR_PIN_RL_IN2 },
+    { RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2 },
+};
 
 static void set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_b, int32_t speed)
 {
@@ -222,6 +244,12 @@ esp_err_t rccar_motor_init(void)
     ret = setup_motor_on_group(1, s_timer1, MOTOR_TURRET, RCCAR_PIN_TURRET_IN1, RCCAR_PIN_TURRET_IN2);
     ESP_RETURN_ON_ERROR(ret, TAG, "TURRET");
 
+    ESP_LOGI(TAG, "pin map FL=%d/%d FR=%d/%d RL=%d/%d RR=%d/%d",
+             RCCAR_PIN_FL_IN1, RCCAR_PIN_FL_IN2,
+             RCCAR_PIN_FR_IN1, RCCAR_PIN_FR_IN2,
+             RCCAR_PIN_RL_IN1, RCCAR_PIN_RL_IN2,
+             RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2);
+
     ret = mcpwm_timer_enable(s_timer0);
     ESP_RETURN_ON_ERROR(ret, TAG, "timer0 enable");
     ret = mcpwm_timer_start_stop(s_timer0, MCPWM_TIMER_START_NO_STOP);
@@ -241,6 +269,47 @@ esp_err_t rccar_motor_init(void)
     return ESP_OK;
 }
 
+static void log_wheel_set(int fl, int fr, int rl, int rr)
+{
+    static int last_fl, last_fr, last_rl, last_rr;
+    static int64_t last_log_ms = 0;
+
+    const int vals[WHEEL_COUNT] = { fl, fr, rl, rr };
+    int applied[WHEEL_COUNT];
+    for (int i = 0; i < WHEEL_COUNT; i++) {
+        applied[i] = apply_min_speed(vals[i]);
+    }
+
+    bool changed = (fl != last_fl || fr != last_fr || rl != last_rl || rr != last_rr);
+    if (!changed) {
+        return;
+    }
+
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    bool all_stop = (fl == 0 && fr == 0 && rl == 0 && rr == 0);
+    if (!all_stop && (now_ms - last_log_ms) < WHEEL_LOG_INTERVAL_MS) {
+        return;
+    }
+
+    last_fl = fl;
+    last_fr = fr;
+    last_rl = rl;
+    last_rr = rr;
+    last_log_ms = now_ms;
+
+    ESP_LOGI(TAG, "wheel cmd FL=%d FR=%d RL=%d RR=%d | applied FR=%d RR=%d",
+             fl, fr, rl, rr, applied[WHEEL_FR], applied[WHEEL_RR]);
+
+    for (int i = WHEEL_FR; i <= WHEEL_RR; i++) {
+        if (!s_motors[i].cmpr_a || !s_motors[i].cmpr_b) {
+            ESP_LOGW(TAG, "%s cmpr missing (a=%p b=%p)",
+                     WHEEL_NAME[i],
+                     (void *)s_motors[i].cmpr_a,
+                     (void *)s_motors[i].cmpr_b);
+        }
+    }
+}
+
 void rccar_motor_wheel_set(int fl, int fr, int rl, int rr)
 {
     if (!s_inited || !s_motor_mutex) {
@@ -253,6 +322,7 @@ void rccar_motor_wheel_set(int fl, int fr, int rl, int rr)
                 set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, apply_min_speed(vals[i]));
             }
         }
+        log_wheel_set(fl, fr, rl, rr);
         xSemaphoreGive(s_motor_mutex);
     }
 }
@@ -271,4 +341,84 @@ void rccar_motor_all_stop(void)
 {
     rccar_motor_wheel_set(0, 0, 0, 0);
     rccar_motor_turret_set(0);
+}
+
+static void wheel_test_spin_one(int wheel_idx, int speed)
+{
+    int fl = 0;
+    int fr = 0;
+    int rl = 0;
+    int rr = 0;
+
+    switch (wheel_idx) {
+    case WHEEL_FL:
+        fl = speed;
+        break;
+    case WHEEL_FR:
+        fr = speed;
+        break;
+    case WHEEL_RL:
+        rl = speed;
+        break;
+    case WHEEL_RR:
+        rr = speed;
+        break;
+    default:
+        return;
+    }
+
+    ESP_LOGI(TAG, "wheel test %s %s gpio %d/%d speed %d",
+             WHEEL_NAME[wheel_idx],
+             (speed > 0) ? "FWD" : "REV",
+             WHEEL_TEST_GPIO[wheel_idx][0],
+             WHEEL_TEST_GPIO[wheel_idx][1],
+             speed);
+    rccar_motor_wheel_set(fl, fr, rl, rr);
+}
+
+static void wheel_test_task(void *arg)
+{
+    (void)arg;
+
+    s_wheel_test_active = true;
+    ESP_LOGI(TAG, "wheel test start (FL->FR->RL->RR, %d ms each)", WHEEL_TEST_RUN_MS);
+
+    for (int pass = 0; pass < 2; pass++) {
+        int speed = (pass == 0) ? WHEEL_TEST_SPEED : -WHEEL_TEST_SPEED;
+        const char *pass_name = (pass == 0) ? "forward" : "reverse";
+
+        ESP_LOGI(TAG, "wheel test pass: %s", pass_name);
+        for (int i = 0; i < WHEEL_COUNT; i++) {
+            wheel_test_spin_one(i, speed);
+            vTaskDelay(pdMS_TO_TICKS(WHEEL_TEST_RUN_MS));
+            rccar_motor_wheel_set(0, 0, 0, 0);
+            vTaskDelay(pdMS_TO_TICKS(WHEEL_TEST_GAP_MS));
+        }
+    }
+
+    rccar_motor_wheel_set(0, 0, 0, 0);
+    ESP_LOGI(TAG, "wheel test done");
+    s_wheel_test_active = false;
+    s_wheel_test_task = NULL;
+    vTaskDelete(NULL);
+}
+
+bool rccar_motor_wheel_test_is_running(void)
+{
+    return s_wheel_test_active;
+}
+
+void rccar_motor_wheel_test_start(void)
+{
+    if (!s_inited || s_wheel_test_task != NULL) {
+        return;
+    }
+
+    BaseType_t ret = xTaskCreatePinnedToCore(
+        wheel_test_task, "wheel_test", WHEEL_TEST_STACK, NULL,
+        WHEEL_TEST_PRIO, &s_wheel_test_task, 1);
+    if (ret != pdPASS) {
+        ESP_LOGE(TAG, "wheel test task create failed");
+        s_wheel_test_task = NULL;
+    }
 }

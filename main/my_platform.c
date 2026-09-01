@@ -46,6 +46,7 @@
 #define GUN_RUMBLE_WEAK 150
 #define GUN_RUMBLE_STRONG 255
 #define SELECT_START_HOLD_MS 3000
+#define WHEEL_TEST_HOLD_MS 3000
 #define X_RUMBLE_DURATION_MS 500
 #define X_RUMBLE_WEAK 255
 #define X_RUMBLE_STRONG 255
@@ -397,6 +398,8 @@ static void input_process_task(void *arg) {
     static int64_t last_b_ms = 0;
     static int64_t select_start_pressed_at = 0;
     static bool select_start_fired = false;
+    static int64_t wheel_test_pressed_at = 0;
+    static bool wheel_test_fired = false;
     static uint16_t prev_buttons = 0;
     static int64_t last_input_ms = 0;
     static bool failsafe_active = true;
@@ -413,6 +416,8 @@ static void input_process_task(void *arg) {
             prev_buttons = 0;
             select_start_pressed_at = 0;
             select_start_fired = false;
+            wheel_test_pressed_at = 0;
+            wheel_test_fired = false;
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -448,6 +453,26 @@ static void input_process_task(void *arg) {
 
         failsafe_active = false;
 
+        /* L1 + R1 hold: 개별 휠 테스트 (차량을 들어 올린 상태에서 사용) */
+        uint8_t l1 = (evt.buttons & BUTTON_SHOULDER_L) ? 1 : 0;
+        uint8_t r1 = (evt.buttons & BUTTON_SHOULDER_R) ? 1 : 0;
+        if (l1 && r1) {
+            if (wheel_test_pressed_at == 0) {
+                wheel_test_pressed_at = now_ms;
+            }
+            if (!wheel_test_fired &&
+                !rccar_motor_wheel_test_is_running() &&
+                now_ms - wheel_test_pressed_at >= WHEEL_TEST_HOLD_MS) {
+                wheel_test_fired = true;
+                rccar_motor_wheel_test_start();
+                request_rumble(evt.device, 300, 200, 200);
+            }
+        } else {
+            wheel_test_pressed_at = 0;
+            wheel_test_fired = false;
+        }
+
+        if (!rccar_motor_wheel_test_is_running()) {
         int32_t ax = clamp_axis(evt.axis_x);
         int32_t ay = clamp_axis(evt.axis_y);
         int32_t arx = clamp_axis(evt.axis_rx);
@@ -472,6 +497,7 @@ static void input_process_task(void *arg) {
         if (evt.dpad & DPAD_RIGHT)
             turret = TURRET_SPEED;
         rccar_motor_turret_set(turret);
+        } /* !wheel_test */
 
         /* Y edge: 네오픽셀 엔진 효과 토글 */
         if ((evt.buttons & BUTTON_Y) && !(prev_buttons & BUTTON_Y)) {
@@ -497,7 +523,8 @@ static void input_process_task(void *arg) {
             }
         }
 
-        /* L1 / R1: volume - / + */
+        /* L1 / R1: volume - / + (동시 누름은 휠 테스트용) */
+        if (!(l1 && r1)) {
         if (evt.buttons & BUTTON_SHOULDER_L) {
             if (now_ms - last_l1_ms >= DEBOUNCE_MS) {
                 last_l1_ms = now_ms;
@@ -520,6 +547,7 @@ static void input_process_task(void *arg) {
                     rccar_dfplayer_set_volume(v);
                 }
             }
+        }
         }
 
         /* Select + Start hold: factory reset (NVS erase + reboot) */
