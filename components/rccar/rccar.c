@@ -2,7 +2,7 @@
  * @file rccar.c
  * @brief RC Car 통합 초기화
  *
- * 순서: storage → motor → humidifier → neopixel → laser → headlight
+ * 순서: storage → motor → humidifier → neopixel → laser → headlight → radar
  * DFPlayer는 uni_init() 밖에서(on_init_complete) 따로 초기화한다.
  */
 #include "rccar.h"
@@ -15,6 +15,7 @@
 #include "rccar_laser.h"
 #include "rccar_motor.h"
 #include "rccar_neopixel.h"
+#include "rccar_radar.h"
 #include "rccar_storage.h"
 
 static const char *TAG = "rccar";
@@ -33,6 +34,7 @@ esp_err_t rccar_init(void)
     ESP_RETURN_ON_ERROR(rccar_neopixel_init(), TAG, "neopixel");
     ESP_RETURN_ON_ERROR(rccar_laser_init(), TAG, "laser");
     ESP_RETURN_ON_ERROR(rccar_headlight_init(), TAG, "headlight");
+    ESP_RETURN_ON_ERROR(rccar_radar_init(), TAG, "radar");
 
     ESP_LOGI(TAG, "rccar_init ok (volume=%u)", (unsigned)rccar_storage_volume_get());
     return ESP_OK;

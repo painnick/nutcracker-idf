@@ -17,6 +17,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 네오픽셀 | WS2812 4개 (GPIO13), Y 버튼 엔진 idle 효과 토글 |
 | 레이저 | GPIO15, B 버튼 발사 (0002.mp3 + LED, 후좌 없음) |
 | 헤드라이트 | GPIO14, A 버튼 ON/OFF 토글 (HIGH=ON) |
+| 레이더 서보 | GPIO32, 180° 위치 서보. 0°↔180° 왕복 6초 (자동) |
 | 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
 | 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지 |
 | 패드 피드백 | 연결 시 진동, 상태별 효과음 (IDLE / CONNECT) |
@@ -44,6 +45,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 네오픽셀 DATA | 13 | WS2812 x4 |
 | 레이저 LED | 15 | LOW=ON (MOSFET) |
 | 헤드라이트 LED | 14 | HIGH=ON |
+| 레이더 서보 | 32 | LEDC 50 Hz, 0°↔180° 왕복 |
 | DFPlayer TX | 5 | UART TX |
 
 ## 게임패드 조작
@@ -118,6 +120,7 @@ nutcracker-idf/
       rccar_neopixel.c   # WS2812 엔진 효과
       rccar_laser.c      # 레이저 LED
       rccar_headlight.c  # 헤드라이트
+      rccar_radar.c      # 레이더 서보
       rccar_dfplayer.c    # 사운드
       rccar_storage.c     # 볼륨 NVS
 ```

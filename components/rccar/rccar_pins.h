@@ -49,6 +49,9 @@ extern "C" {
 #define RCCAR_PIN_HEADLIGHT (GPIO_NUM_14)
 #define RCCAR_HEADLIGHT_ACTIVE_LOW 0
 
+/* 레이더 서보 PWM (50 Hz) */
+#define RCCAR_PIN_RADAR_SERVO (GPIO_NUM_32)
+
 #ifdef __cplusplus
 }
 #endif

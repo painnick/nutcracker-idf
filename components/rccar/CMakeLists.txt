@@ -7,6 +7,7 @@ set(srcs
     rccar_ws2812_encoder.c
     rccar_laser.c
     rccar_headlight.c
+    rccar_radar.c
     rccar_dfplayer.c
     rccar_storage.c
 )
