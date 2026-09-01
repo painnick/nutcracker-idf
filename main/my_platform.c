@@ -2,9 +2,8 @@
 // 입력 처리를 Core 1로 오프로딩하여 Core 0 BT 컨트롤러 부하 경감
 //
 // Stick sign conventions (Bluepad32 / typical HID, after deadzone):
-//   axis_y: up is negative -> invert so up = +vx (forward)
-//   axis_x: right is positive -> +vy (strafe right)
-//   axis_rx: right is positive -> +w (yaw CW looking from above)
+//   Left  Y: forward/back (vx). Left  X: yaw (w), car-like turn.
+//   Right X: strafe left/right (vy). Right Y: strafe forward/back (vx), w=0.
 // Adjust STICK_*_SIGN below if real hardware orientation differs.
 
 #include <string.h>
@@ -18,6 +17,7 @@
 #include "controller/uni_gamepad.h"
 #include "uni_common.h"
 
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,12 +50,16 @@
 #define HUMIDIFIER_PULSE_ON_MS 3000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
-#define STICK_VX_SIGN (-1) /* axis_y: invert so stick-up = forward */
-#define STICK_VY_SIGN (1)  /* axis_x: stick-right = strafe right */
-#define STICK_W_SIGN (1)   /* axis_rx: stick-right = yaw CW */
+#define STICK_VX_SIGN (-1)  /* stick Y up = forward */
+#define STICK_VY_SIGN (1)   /* right stick X right = strafe right */
+#define STICK_W_SIGN (1)    /* left stick X right = yaw CW */
+#define STICK_RY_VX_SIGN (-1) /* right stick Y up = strafe forward */
 
 #define INPUT_QUEUE_LEN 1
 #define INPUT_TASK_STACK 4096
+#define DRIVE_LOG_INTERVAL_MS 300
+
+static const char *DRIVE_LOG_TAG = "drive_dbg";
 #define INPUT_TASK_PRIO 5
 #define INPUT_POLL_MS 50
 /* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
@@ -78,9 +82,10 @@ typedef struct my_platform_instance_s {
 } my_platform_instance_t;
 
 typedef struct {
-    int32_t axis_x;  /* left stick X = vy */
-    int32_t axis_y;  /* left stick Y = vx */
-    int32_t axis_rx; /* right stick X = w */
+    int32_t axis_x;  /* left stick X → yaw */
+    int32_t axis_y;  /* left stick Y → forward/back */
+    int32_t axis_rx; /* right stick X → strafe left/right */
+    int32_t axis_ry; /* right stick Y → strafe forward/back (w=0) */
     uint16_t dpad;
     uint16_t buttons;
     uint8_t misc_buttons;
@@ -319,6 +324,42 @@ static void failsafe_stop(void) {
     rccar_neopixel_set_enabled(false);
 }
 
+static void log_drive_mix(int32_t vx, int32_t vy, int32_t w, const rccar_wheel_speeds_t *wheels)
+{
+    static int32_t last_vx, last_vy, last_w;
+    static int last_fl, last_fr, last_rl, last_rr;
+    static int64_t last_log_ms = 0;
+
+    bool changed = (vx != last_vx || vy != last_vy || w != last_w ||
+                    wheels->fl != last_fl || wheels->fr != last_fr ||
+                    wheels->rl != last_rl || wheels->rr != last_rr);
+    if (!changed) {
+        return;
+    }
+
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    bool all_stop = (vx == 0 && vy == 0 && w == 0 &&
+                     wheels->fl == 0 && wheels->fr == 0 &&
+                     wheels->rl == 0 && wheels->rr == 0);
+    if (!all_stop && (now_ms - last_log_ms) < DRIVE_LOG_INTERVAL_MS) {
+        return;
+    }
+
+    last_vx = vx;
+    last_vy = vy;
+    last_w = w;
+    last_fl = wheels->fl;
+    last_fr = wheels->fr;
+    last_rl = wheels->rl;
+    last_rr = wheels->rr;
+    last_log_ms = now_ms;
+
+    ESP_LOGI(DRIVE_LOG_TAG,
+             "mix vx=%ld vy=%ld w=%ld -> FL=%ld FR=%ld RL=%ld RR=%ld",
+             (long)vx, (long)vy, (long)w,
+             (long)wheels->fl, (long)wheels->fr, (long)wheels->rl, (long)wheels->rr);
+}
+
 static void input_process_task(void *arg) {
     (void)arg;
 
@@ -381,13 +422,19 @@ static void input_process_task(void *arg) {
         int32_t ax = clamp_axis(evt.axis_x);
         int32_t ay = clamp_axis(evt.axis_y);
         int32_t arx = clamp_axis(evt.axis_rx);
+        int32_t ary = clamp_axis(evt.axis_ry);
 
+        /* Left stick: car-like drive (forward/back + yaw) */
         int32_t vx = STICK_VX_SIGN * rccar_drive_apply_deadzone(ay, AXIS_DEADZONE);
-        int32_t vy = STICK_VY_SIGN * rccar_drive_apply_deadzone(ax, AXIS_DEADZONE);
-        int32_t w = STICK_W_SIGN * rccar_drive_apply_deadzone(arx, AXIS_DEADZONE);
+        int32_t w = STICK_W_SIGN * rccar_drive_apply_deadzone(ax, AXIS_DEADZONE);
+
+        /* Right stick: body-frame translation, no yaw */
+        vx += STICK_RY_VX_SIGN * rccar_drive_apply_deadzone(ary, AXIS_DEADZONE);
+        int32_t vy = STICK_VY_SIGN * rccar_drive_apply_deadzone(arx, AXIS_DEADZONE);
 
         rccar_wheel_speeds_t wheels;
         rccar_drive_mix(vx, vy, w, &wheels);
+        log_drive_mix(vx, vy, w, &wheels);
         rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
 
         int32_t turret = 0;
@@ -668,6 +715,7 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
             evt.axis_x = ctl->gamepad.axis_x;
             evt.axis_y = ctl->gamepad.axis_y;
             evt.axis_rx = ctl->gamepad.axis_rx;
+            evt.axis_ry = ctl->gamepad.axis_ry;
             evt.dpad = ctl->gamepad.dpad;
             evt.buttons = buttons;
             evt.misc_buttons = ctl->gamepad.misc_buttons;
@@ -675,8 +723,13 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
         }
         case UNI_CONTROLLER_CLASS_BALANCE_BOARD: {
             my_platform_instance_t *ins = get_my_platform_instance(d);
-            balance_board_to_stick_axes(&ctl->balance_board, &ins->bb_state, &evt.axis_x, &evt.axis_y);
-            evt.axis_rx = 0;
+            int32_t bb_x = 0;
+            int32_t bb_y = 0;
+            balance_board_to_stick_axes(&ctl->balance_board, &ins->bb_state, &bb_x, &bb_y);
+            evt.axis_x = 0;
+            evt.axis_y = bb_y;
+            evt.axis_rx = bb_x;
+            evt.axis_ry = 0;
             break;
         }
         default:
