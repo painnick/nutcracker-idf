@@ -5,13 +5,16 @@
  * MCPWM group 0: FL, FR, RL (operators 3)
  * MCPWM group 1: RR, TURRET (operators 2)
  * 20 kHz, resolution 1 MHz. 램프 없이 지정한 속도를 즉시 듀티에 반영한다.
+ * GPIO12 nSLEEP: 휠/포탑 중 하나라도 움직이면 HIGH, 전부 0이면 LOW.
  */
 #include "rccar_motor.h"
 #include "rccar_pins.h"
 
+#include "driver/gpio.h"
 #include "driver/mcpwm_prelude.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_rom_sys.h"
 #include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
@@ -31,6 +34,9 @@ static const char *TAG = "rccar_motor";
 #define WHEEL_MIN_SPEED      448
 
 #define WHEEL_LOG_INTERVAL_MS 300
+
+/* DRV8833 nSLEEP 기동 시간 (tWAKE 약 1ms) */
+#define MOTOR_SLEEP_WAKE_US  1000
 
 enum {
     WHEEL_FL = 0,
@@ -62,6 +68,9 @@ static mcpwm_timer_handle_t s_timer1 = NULL;
 
 static SemaphoreHandle_t s_motor_mutex = NULL;
 static bool s_inited = false;
+static bool s_sleep_awake = false;
+static int s_last_wheel[WHEEL_COUNT];
+static int s_last_turret = 0;
 
 #define WHEEL_TEST_SPEED     400
 #define WHEEL_TEST_RUN_MS    1500
@@ -78,6 +87,31 @@ static const int WHEEL_TEST_GPIO[WHEEL_COUNT][2] = {
     { RCCAR_PIN_RL_IN1, RCCAR_PIN_RL_IN2 },
     { RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2 },
 };
+
+static bool any_motor_nonzero(const int wheels[WHEEL_COUNT], int turret)
+{
+    for (int i = 0; i < WHEEL_COUNT; i++) {
+        if (wheels[i] != 0) {
+            return true;
+        }
+    }
+    return turret != 0;
+}
+
+static void motor_sleep_set(bool awake)
+{
+    if (s_sleep_awake == awake) {
+        return;
+    }
+
+    gpio_set_level(RCCAR_PIN_MOTOR_SLEEP, awake ? 1 : 0);
+    s_sleep_awake = awake;
+    ESP_LOGI(TAG, "nSLEEP %s (gpio %d)",
+             awake ? "HIGH" : "LOW", (int)RCCAR_PIN_MOTOR_SLEEP);
+    if (awake) {
+        esp_rom_delay_us(MOTOR_SLEEP_WAKE_US);
+    }
+}
 
 static void set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_b, int32_t speed)
 {
@@ -215,6 +249,22 @@ esp_err_t rccar_motor_init(void)
         return ESP_FAIL;
     }
 
+    gpio_config_t sleep_io = {
+        .pin_bit_mask = (1ULL << RCCAR_PIN_MOTOR_SLEEP),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    ret = gpio_config(&sleep_io);
+    ESP_RETURN_ON_ERROR(ret, TAG, "nSLEEP gpio %d", (int)RCCAR_PIN_MOTOR_SLEEP);
+    gpio_set_level(RCCAR_PIN_MOTOR_SLEEP, 0);
+    s_sleep_awake = false;
+    for (int i = 0; i < WHEEL_COUNT; i++) {
+        s_last_wheel[i] = 0;
+    }
+    s_last_turret = 0;
+
     mcpwm_timer_config_t timer_config = {
         .group_id = 0,
         .clk_src = MCPWM_TIMER_CLK_SRC_DEFAULT,
@@ -244,11 +294,12 @@ esp_err_t rccar_motor_init(void)
     ret = setup_motor_on_group(1, s_timer1, MOTOR_TURRET, RCCAR_PIN_TURRET_IN1, RCCAR_PIN_TURRET_IN2);
     ESP_RETURN_ON_ERROR(ret, TAG, "TURRET");
 
-    ESP_LOGI(TAG, "pin map FL=%d/%d FR=%d/%d RL=%d/%d RR=%d/%d",
+    ESP_LOGI(TAG, "pin map FL=%d/%d FR=%d/%d RL=%d/%d RR=%d/%d nSLEEP=%d",
              RCCAR_PIN_FL_IN1, RCCAR_PIN_FL_IN2,
              RCCAR_PIN_FR_IN1, RCCAR_PIN_FR_IN2,
              RCCAR_PIN_RL_IN1, RCCAR_PIN_RL_IN2,
-             RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2);
+             RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2,
+             (int)RCCAR_PIN_MOTOR_SLEEP);
 
     ret = mcpwm_timer_enable(s_timer0);
     ESP_RETURN_ON_ERROR(ret, TAG, "timer0 enable");
@@ -317,23 +368,42 @@ void rccar_motor_wheel_set(int fl, int fr, int rl, int rr)
     }
     if (xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
         const int vals[WHEEL_COUNT] = { fl, fr, rl, rr };
+        bool want_awake = any_motor_nonzero(vals, s_last_turret);
+        if (want_awake) {
+            motor_sleep_set(true);
+        }
         for (int i = 0; i < WHEEL_COUNT; i++) {
             if (s_motors[i].cmpr_a && s_motors[i].cmpr_b) {
                 set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, apply_min_speed(vals[i]));
             }
+            s_last_wheel[i] = vals[i];
         }
         log_wheel_set(fl, fr, rl, rr);
+        if (!want_awake) {
+            motor_sleep_set(false);
+        }
         xSemaphoreGive(s_motor_mutex);
     }
 }
 
 void rccar_motor_turret_set(int speed)
 {
-    if (!s_inited) {
+    if (!s_inited || !s_motor_mutex) {
         return;
     }
-    if (s_motors[MOTOR_TURRET].cmpr_a && s_motors[MOTOR_TURRET].cmpr_b) {
-        set_motor_duty(s_motors[MOTOR_TURRET].cmpr_a, s_motors[MOTOR_TURRET].cmpr_b, speed);
+    if (xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
+        bool want_awake = any_motor_nonzero(s_last_wheel, speed);
+        if (want_awake) {
+            motor_sleep_set(true);
+        }
+        if (s_motors[MOTOR_TURRET].cmpr_a && s_motors[MOTOR_TURRET].cmpr_b) {
+            set_motor_duty(s_motors[MOTOR_TURRET].cmpr_a, s_motors[MOTOR_TURRET].cmpr_b, speed);
+        }
+        s_last_turret = speed;
+        if (!want_awake) {
+            motor_sleep_set(false);
+        }
+        xSemaphoreGive(s_motor_mutex);
     }
 }
 

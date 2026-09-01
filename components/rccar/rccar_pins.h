@@ -31,6 +31,9 @@ extern "C" {
 #define RCCAR_PIN_TURRET_IN1 (GPIO_NUM_16)
 #define RCCAR_PIN_TURRET_IN2 (GPIO_NUM_17)
 
+/* DRV8833 nSLEEP 공통 (HIGH=동작, LOW=슬립). GPIO12는 스트래핑 핀이라 유휴 시 LOW */
+#define RCCAR_PIN_MOTOR_SLEEP (GPIO_NUM_12)
+
 /* 가습기 MOSFET/릴레이 (HIGH=ON) */
 #define RCCAR_PIN_HUMIDIFIER (GPIO_NUM_4)
 

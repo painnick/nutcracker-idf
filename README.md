@@ -26,7 +26,8 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 
 정의: `components/rccar/rccar_pins.h`.
 
-모터 출력에 스트래핑 위험 핀(0, 2, 12, 15)을 쓰지 않습니다.
+모터 PWM에는 스트래핑 위험 핀(0, 2)을 쓰지 않습니다.
+GPIO12는 DRV8833 nSLEEP 공통이며 유휴 시 LOW라 부팅 스트래핑(플래시 3.3V)과 맞습니다.
 플래시(6-11), UART0 콘솔(1, 3), 입력 전용(34-39)은 출력에 사용하지 않습니다.
 
 | 기능 | GPIO | 블록 |
@@ -41,6 +42,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | RR IN2 | 27 | DRV8833 #2 후륜 우 |
 | 포탑 IN1 | 16 | DRV8833 #3 |
 | 포탑 IN2 | 17 | DRV8833 #3 |
+| 모터 nSLEEP | 12 | DRV8833 #1/#2/#3 공통, HIGH=동작 |
 | 가습기 MOSFET/릴레이 | 4 | HIGH=ON |
 | 네오픽셀 DATA | 13 | WS2812 x4 |
 | 레이저 LED | 15 | LOW=ON (MOSFET) |
@@ -96,6 +98,7 @@ TV 쪽이 보드 **앞(top)** 센서입니다. 앞으로 기울이면 전진, �
 ## 하드웨어 주의
 
 - **DRV8833 3개**: #1 전륜(FL/FR), #2 후륜(RL/RR), #3 포탑. DC 모터는 전부 MCPWM (LEDC 사용 안 함).
+- **nSLEEP (GPIO12)**: 세 드라이버 공통. 휠 또는 포탑이 움직이기 직전에 HIGH, 전부 정지하면 LOW. 부팅 시 LOW 유지.
 - **ESP32 MCPWM**: 그룹당 operator 최대 3. 모터 5채널은 group 0에 3개 + group 1에 2개로 배치.
 - **DFPlayer**: TX 전용 (GPIO 5 → 모듈 RX). 수신 핀 미사용.
 - 모터 전원과 로직 전원을 분리하고, 공통 GND를 확실히 연결할 것.
