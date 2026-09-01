@@ -45,6 +45,10 @@ extern "C" {
 #define RCCAR_PIN_SOUND_TX (GPIO_NUM_5)
 #define RCCAR_PIN_SOUND_RX (GPIO_NUM_NC)
 
+/* 헤드라이트 LED (HIGH=ON) */
+#define RCCAR_PIN_HEADLIGHT (GPIO_NUM_14)
+#define RCCAR_HEADLIGHT_ACTIVE_LOW 0
+
 #ifdef __cplusplus
 }
 #endif

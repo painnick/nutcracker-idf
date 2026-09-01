@@ -26,6 +26,7 @@
 #include "rccar.h"
 #include "rccar_dfplayer.h"
 #include "rccar_drive.h"
+#include "rccar_headlight.h"
 #include "rccar_humidifier.h"
 #include "rccar_laser.h"
 #include "rccar_motor.h"
@@ -38,6 +39,7 @@
 #define TURRET_SPEED 511
 #define DEBOUNCE_MS 100
 #define NEOPIXEL_DEBOUNCE_MS 400
+#define HEADLIGHT_DEBOUNCE_MS 400
 #define LASER_DEBOUNCE_MS 400
 #define GUN_FIRE_DELAY_MS 400
 #define GUN_RUMBLE_DURATION_MS 400
@@ -391,6 +393,7 @@ static void input_process_task(void *arg) {
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
     static int64_t last_y_ms = 0;
+    static int64_t last_a_ms = 0;
     static int64_t last_b_ms = 0;
     static int64_t select_start_pressed_at = 0;
     static bool select_start_fired = false;
@@ -475,6 +478,14 @@ static void input_process_task(void *arg) {
             if (now_ms - last_y_ms >= NEOPIXEL_DEBOUNCE_MS) {
                 last_y_ms = now_ms;
                 rccar_neopixel_toggle();
+            }
+        }
+
+        /* A edge: 헤드라이트 토글 */
+        if ((evt.buttons & BUTTON_A) && !(prev_buttons & BUTTON_A)) {
+            if (now_ms - last_a_ms >= HEADLIGHT_DEBOUNCE_MS) {
+                last_a_ms = now_ms;
+                rccar_headlight_toggle();
             }
         }
 
