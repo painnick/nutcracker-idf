@@ -5,6 +5,7 @@ set(srcs
     rccar_humidifier.c
     rccar_neopixel.c
     rccar_ws2812_encoder.c
+    rccar_laser.c
     rccar_dfplayer.c
     rccar_storage.c
 )

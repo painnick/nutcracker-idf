@@ -37,6 +37,10 @@ extern "C" {
 /* WS2812 네오픽셀 (4개, DATA) */
 #define RCCAR_PIN_NEOPIXEL (GPIO_NUM_13)
 
+/* 레이저 LED MOSFET (LOW=ON, HIGH=OFF) */
+#define RCCAR_PIN_LASER (GPIO_NUM_15)
+#define RCCAR_LASER_ACTIVE_LOW 1
+
 /* DFPlayer Mini UART TX */
 #define RCCAR_PIN_SOUND_TX (GPIO_NUM_5)
 #define RCCAR_PIN_SOUND_RX (GPIO_NUM_NC)

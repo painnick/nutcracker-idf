@@ -27,7 +27,7 @@ idf.py flash monitor
 |------|------|
 | `main/main.c` | BTstack + Bluepad32 부트 |
 | `main/my_platform.c` | 패드 매핑, Core1 입력 처리, 페일세이프 |
-| `components/rccar/` | 메카넘 카 전용 (drive/motor/humidifier/neopixel/dfplayer/storage) |
+| `components/rccar/` | 메카넘 카 전용 (drive/motor/humidifier/neopixel/laser/dfplayer/storage) |
 | `components/rccar/rccar_pins.h` | 핀 맵 |
 | `components/bluepad32/` | Git submodule (`painnick/bluepad32`). IDF 컴포넌트는 `src/components/bluepad32` |
 | `components/btstack/` | panzer4 계열 BTstack (로컬 벤더) |

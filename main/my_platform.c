@@ -27,6 +27,7 @@
 #include "rccar_dfplayer.h"
 #include "rccar_drive.h"
 #include "rccar_humidifier.h"
+#include "rccar_laser.h"
 #include "rccar_motor.h"
 #include "rccar_neopixel.h"
 #include "rccar_storage.h"
@@ -37,6 +38,11 @@
 #define TURRET_SPEED 511
 #define DEBOUNCE_MS 100
 #define NEOPIXEL_DEBOUNCE_MS 400
+#define LASER_DEBOUNCE_MS 400
+#define GUN_FIRE_DELAY_MS 400
+#define GUN_RUMBLE_DURATION_MS 400
+#define GUN_RUMBLE_WEAK 150
+#define GUN_RUMBLE_STRONG 255
 #define SELECT_START_HOLD_MS 3000
 #define X_RUMBLE_DURATION_MS 500
 #define X_RUMBLE_WEAK 255
@@ -105,6 +111,7 @@ static esp_timer_handle_t gamepad_effect_timer = NULL;
 static esp_timer_handle_t gamepad_keepalive_timer = NULL;
 static esp_timer_handle_t scan_restart_timer = NULL;
 static esp_timer_handle_t humidifier_pulse_timer = NULL;
+static esp_timer_handle_t laser_rumble_timer = NULL;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
 
@@ -121,6 +128,7 @@ static uint8_t volatile rumble_strong = X_RUMBLE_STRONG;
 static uni_hid_device_t *volatile gamepad_effect_device = NULL;
 static uni_hid_device_t *volatile keepalive_device = NULL;
 static uint16_t s_gamepad_prev_buttons = 0;
+static uni_hid_device_t *volatile laser_rumble_device = NULL;
 
 static bool device_uses_parser_keepalive(uni_hid_device_t *d) {
     return d != NULL && d->controller_type == CONTROLLER_TYPE_XBoxOneController;
@@ -163,6 +171,22 @@ static void handle_x_button_press(uni_hid_device_t *d) {
         d->report_parser.play_dual_rumble(d, 0, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
     esp_timer_stop(humidifier_pulse_timer);
     esp_timer_start_once(humidifier_pulse_timer, (uint64_t)X_RUMBLE_DURATION_MS * 1000ULL);
+}
+
+static void handle_b_button_fire(uni_hid_device_t *d) {
+    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_GUN);
+    rccar_laser_fire();
+    laser_rumble_device = d;
+    esp_timer_stop(laser_rumble_timer);
+    esp_timer_start_once(laser_rumble_timer, (uint64_t)GUN_FIRE_DELAY_MS * 1000ULL);
+}
+
+static void laser_rumble_cb(void *arg) {
+    (void)arg;
+    uni_hid_device_t *d = laser_rumble_device;
+    laser_rumble_device = NULL;
+    if (d != NULL)
+        request_rumble(d, GUN_RUMBLE_DURATION_MS, GUN_RUMBLE_WEAK, GUN_RUMBLE_STRONG);
 }
 
 static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t weak, uint8_t strong) {
@@ -322,6 +346,7 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
 static void failsafe_stop(void) {
     rccar_motor_all_stop();
     rccar_neopixel_set_enabled(false);
+    rccar_laser_stop();
 }
 
 static void log_drive_mix(int32_t vx, int32_t vy, int32_t w, const rccar_wheel_speeds_t *wheels)
@@ -366,6 +391,7 @@ static void input_process_task(void *arg) {
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
     static int64_t last_y_ms = 0;
+    static int64_t last_b_ms = 0;
     static int64_t select_start_pressed_at = 0;
     static bool select_start_fired = false;
     static uint16_t prev_buttons = 0;
@@ -449,6 +475,14 @@ static void input_process_task(void *arg) {
             if (now_ms - last_y_ms >= NEOPIXEL_DEBOUNCE_MS) {
                 last_y_ms = now_ms;
                 rccar_neopixel_toggle();
+            }
+        }
+
+        /* B edge: 레이저 발사 (효과음 + LED, 후좌 없음) */
+        if ((evt.buttons & BUTTON_B) && !(prev_buttons & BUTTON_B)) {
+            if (now_ms - last_b_ms >= LASER_DEBOUNCE_MS) {
+                last_b_ms = now_ms;
+                handle_b_button_fire(evt.device);
             }
         }
 
@@ -579,6 +613,14 @@ static void my_platform_init(int argc, const char **argv) {
         .name = "humidifier_pulse",
     };
     esp_timer_create(&humidifier_pulse_args, &humidifier_pulse_timer);
+
+    const esp_timer_create_args_t laser_rumble_args = {
+        .callback = &laser_rumble_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "laser_rumble",
+    };
+    esp_timer_create(&laser_rumble_args, &laser_rumble_timer);
 }
 
 static void my_platform_on_init_complete(void) {
@@ -649,6 +691,8 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     esp_timer_stop(gamepad_effect_timer);
     gamepad_keepalive_stop();
     esp_timer_stop(humidifier_pulse_timer);
+    esp_timer_stop(laser_rumble_timer);
+    laser_rumble_device = NULL;
     failsafe_stop();
     if (input_queue != NULL)
         xQueueReset(input_queue);
