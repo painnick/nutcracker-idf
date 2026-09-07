@@ -37,7 +37,7 @@ extern "C" {
 /* 가습기 MOSFET/릴레이 (HIGH=ON) */
 #define RCCAR_PIN_HUMIDIFIER (GPIO_NUM_4)
 
-/* WS2812 네오픽셀 (4개, DATA) */
+/* WS2812 네오픽셀 (8개, DATA) */
 #define RCCAR_PIN_NEOPIXEL (GPIO_NUM_13)
 
 /* 레이저 LED MOSFET (LOW=ON, HIGH=OFF) */

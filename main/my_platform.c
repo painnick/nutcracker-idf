@@ -56,7 +56,7 @@
 #define SWITCH_CONNECT_RUMBLE_DURATION_MS 600
 #define SWITCH_CONNECT_RUMBLE_WEAK 255
 #define SWITCH_CONNECT_RUMBLE_STRONG 255
-#define HUMIDIFIER_PULSE_ON_MS 3000
+#define HUMIDIFIER_PULSE_ON_MS 2000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
 #define STICK_VX_SIGN (-1)  /* stick Y up = forward */
