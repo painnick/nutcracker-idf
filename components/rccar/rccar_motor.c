@@ -5,7 +5,7 @@
  * MCPWM group 0: FL, FR, RL (operators 3)
  * MCPWM group 1: RR, TURRET (operators 2)
  * 20 kHz, resolution 1 MHz. 램프 없이 지정한 속도를 즉시 듀티에 반영한다.
- * GPIO12 nSLEEP: 휠/포탑 중 하나라도 움직이면 HIGH, 전부 0이면 LOW.
+ * GPIO23 nSLEEP: 휠/포탑 중 하나라도 움직이면 HIGH, 전부 0이면 LOW.
  */
 #include "rccar_motor.h"
 #include "rccar_pins.h"
