@@ -4,6 +4,8 @@
  */
 #include "rccar_drive.h"
 
+#include <stddef.h>
+
 static int32_t iabs(int32_t x)
 {
     return (x < 0) ? -x : x;
@@ -50,4 +52,27 @@ int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone)
         return 0;
     }
     return v;
+}
+
+bool rccar_drive_idle_to_move(bool *was_moving, int64_t *idle_since_ms,
+                              bool moving, int64_t now_ms, int64_t idle_need_ms)
+{
+    if (was_moving == NULL || idle_since_ms == NULL) {
+        return false;
+    }
+
+    bool pulse = false;
+    if (moving) {
+        if (!*was_moving && *idle_since_ms >= 0 &&
+            (now_ms - *idle_since_ms) >= idle_need_ms) {
+            pulse = true;
+        }
+        *was_moving = true;
+    } else {
+        if (*was_moving || *idle_since_ms < 0) {
+            *idle_since_ms = now_ms;
+        }
+        *was_moving = false;
+    }
+    return pulse;
 }

@@ -57,6 +57,8 @@
 #define SWITCH_CONNECT_RUMBLE_WEAK 255
 #define SWITCH_CONNECT_RUMBLE_STRONG 255
 #define HUMIDIFIER_PULSE_ON_MS 2000
+#define IDLE_EXHAUST_STOP_MS 1000
+#define IDLE_EXHAUST_PULSE_ON_MS 1000
 
 /* Stick axis polarity: multiply raw (post-deadzone) value. */
 #define STICK_VX_SIGN (-1)  /* stick Y up = forward */
@@ -132,6 +134,8 @@ static uni_hid_device_t *volatile gamepad_effect_device = NULL;
 static uni_hid_device_t *volatile keepalive_device = NULL;
 static uint16_t s_gamepad_prev_buttons = 0;
 static uni_hid_device_t *volatile laser_rumble_device = NULL;
+static bool s_wheels_were_moving = false;
+static int64_t s_wheels_idle_since_ms = -1;
 
 static bool device_uses_parser_keepalive(uni_hid_device_t *d) {
     return d != NULL && d->controller_type == CONTROLLER_TYPE_XBoxOneController;
@@ -346,7 +350,16 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
         *out_y = clamp_axis((cog_y * AXIS_MAX) / BB_COG_SCALE_RANGE);
 }
 
+static void maybe_idle_exhaust(bool moving, int64_t now_ms)
+{
+    if (rccar_drive_idle_to_move(&s_wheels_were_moving, &s_wheels_idle_since_ms,
+                                 moving, now_ms, IDLE_EXHAUST_STOP_MS)) {
+        rccar_humidifier_pulse_on_ms(IDLE_EXHAUST_PULSE_ON_MS);
+    }
+}
+
 static void failsafe_stop(void) {
+    maybe_idle_exhaust(false, esp_timer_get_time() / 1000);
     rccar_motor_all_stop();
     rccar_neopixel_set_enabled(false);
     rccar_laser_stop();
@@ -490,6 +503,8 @@ static void input_process_task(void *arg) {
         rccar_drive_mix(vx, vy, w, &wheels);
         log_drive_mix(vx, vy, w, &wheels);
         rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+        maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
+                           wheels.rl != 0 || wheels.rr != 0, now_ms);
 
         int32_t turret = 0;
         if (evt.dpad & DPAD_LEFT)

@@ -5,6 +5,7 @@
 #ifndef RCCAR_DRIVE_H
 #define RCCAR_DRIVE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -20,6 +21,14 @@ void rccar_drive_mix(int32_t vx, int32_t vy, int32_t w, rccar_wheel_speeds_t *ou
 
 /** abs가 deadzone 이하면 0, 아니면 그대로 (부호 유지) */
 int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone);
+
+/**
+ * 휠 정지→출발 검출.
+ * idle_since_ms 초기값 -1, was_moving 초기값 false.
+ * 정지가 idle_need_ms 이상 이어진 뒤 움직이기 시작하면 true.
+ */
+bool rccar_drive_idle_to_move(bool *was_moving, int64_t *idle_since_ms,
+                              bool moving, int64_t now_ms, int64_t idle_need_ms);
 
 #ifdef __cplusplus
 }

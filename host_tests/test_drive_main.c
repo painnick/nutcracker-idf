@@ -1,10 +1,11 @@
-﻿/**
+/**
  * Host-side checklist for rccar_drive (no ESP-IDF).
  * Compile: gcc -std=c99 -Wall -Wextra -o test_drive host_tests/test_drive_main.c components/rccar/rccar_drive.c -I components/rccar
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "rccar_drive.h"
 
 static int g_fail;
@@ -18,6 +19,16 @@ static void expect_eq(const char *name, int32_t got, int32_t want)
         g_fail++;
     } else {
         printf("OK   %s = %ld\n", name, (long)got);
+    }
+}
+
+static void expect_bool(const char *name, bool got, bool want)
+{
+    if (got != want) {
+        printf("FAIL %s: got %d want %d\n", name, (int)got, (int)want);
+        g_fail++;
+    } else {
+        printf("OK   %s = %d\n", name, (int)got);
     }
 }
 
@@ -93,6 +104,34 @@ int main(void)
     expect_eq("dz 61", rccar_drive_apply_deadzone(61, 60), 61);
     expect_eq("dz -61", rccar_drive_apply_deadzone(-61, 60), -61);
     expect_eq("dz 100", rccar_drive_apply_deadzone(100, 60), 100);
+
+    printf("--- idle_to_move ---\n");
+    {
+        bool was = false;
+        int64_t idle = -1;
+        const int64_t need = 3000;
+
+        expect_bool("stop t=0", rccar_drive_idle_to_move(&was, &idle, false, 0, need), false);
+        expect_bool("still stop 2999", rccar_drive_idle_to_move(&was, &idle, true, 2999, need), false);
+
+        was = false;
+        idle = -1;
+        rccar_drive_idle_to_move(&was, &idle, false, 0, need);
+        expect_bool("move after 3000", rccar_drive_idle_to_move(&was, &idle, true, 3000, need), true);
+        expect_bool("keep moving", rccar_drive_idle_to_move(&was, &idle, true, 3500, need), false);
+
+        rccar_drive_idle_to_move(&was, &idle, false, 4000, need);
+        expect_bool("move after 1s idle", rccar_drive_idle_to_move(&was, &idle, true, 5000, need), false);
+
+        rccar_drive_idle_to_move(&was, &idle, false, 6000, need);
+        rccar_drive_idle_to_move(&was, &idle, false, 8000, need);
+        expect_bool("move after 3s idle", rccar_drive_idle_to_move(&was, &idle, true, 9000, need), true);
+
+        was = false;
+        idle = -1;
+        expect_bool("first sample already moving",
+                    rccar_drive_idle_to_move(&was, &idle, true, 100, need), false);
+    }
 
     if (g_fail) {
         printf("\n%d FAILURE(S)\n", g_fail);
