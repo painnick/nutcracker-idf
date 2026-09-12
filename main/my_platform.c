@@ -31,6 +31,7 @@
 #include "rccar_laser.h"
 #include "rccar_motor.h"
 #include "rccar_neopixel.h"
+#include "rccar_radar.h"
 #include "rccar_storage.h"
 
 #define AXIS_MAX 512
@@ -352,6 +353,7 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
 
 static void maybe_idle_exhaust(bool moving, int64_t now_ms)
 {
+    rccar_radar_set_moving(moving);
     if (rccar_drive_idle_to_move(&s_wheels_were_moving, &s_wheels_idle_since_ms,
                                  moving, now_ms, IDLE_EXHAUST_STOP_MS)) {
         rccar_humidifier_pulse_on_ms(IDLE_EXHAUST_PULSE_ON_MS);
@@ -487,7 +489,9 @@ static void input_process_task(void *arg) {
             wheel_test_fired = false;
         }
 
-        if (!rccar_motor_wheel_test_is_running()) {
+        if (rccar_motor_wheel_test_is_running()) {
+            rccar_radar_set_moving(true);
+        } else {
         int32_t ax = clamp_axis(evt.axis_x);
         int32_t ay = clamp_axis(evt.axis_y);
         int32_t arx = clamp_axis(evt.axis_rx);

@@ -1,12 +1,13 @@
 /**
  * @file rccar_radar.c
- * @brief 레이더 서보 왕복 (0°↔180°, 왕복 6초)
+ * @brief 레이더 서보. 정지 5초 후 0°↔180° 편도 3초, 끝에서 3초 휴식. 주행 중 정지.
  */
 #include "rccar_radar.h"
 #include "rccar_pins.h"
 
 #include "driver/ledc.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,13 +26,23 @@ static const char *TAG = "rccar_radar";
 
 #define RADAR_SWEEP_MIN_DEG  0
 #define RADAR_SWEEP_MAX_DEG  180
-#define RADAR_ROUNDTRIP_MS   6000
+#define RADAR_ONE_WAY_MS     3000
+#define RADAR_END_REST_MS    3000
+#define RADAR_START_DELAY_MS 5000
 #define RADAR_UPDATE_MS      20
 #define RADAR_TASK_STACK     4096
 #define RADAR_TASK_PRIO      3
 
+enum {
+    RADAR_PHASE_SWEEP = 0,
+    RADAR_PHASE_DWELL,
+};
+
 static bool s_inited = false;
 static TaskHandle_t s_task = NULL;
+static volatile bool s_vehicle_moving = false;
+static volatile bool s_need_start_delay = true;
+static volatile int64_t s_stopped_at_ms = 0;
 
 static uint32_t degree_to_duty(int degree)
 {
@@ -68,36 +79,115 @@ static bool radar_servo_set_deg(int degree)
     return true;
 }
 
-static int sweep_degree(uint32_t elapsed_ms)
+static int opposite_end(int deg)
 {
-    uint32_t t = elapsed_ms % RADAR_ROUNDTRIP_MS;
-    uint32_t half_ms = RADAR_ROUNDTRIP_MS / 2;
-    int span = RADAR_SWEEP_MAX_DEG - RADAR_SWEEP_MIN_DEG;
+    return (deg >= (RADAR_SWEEP_MIN_DEG + RADAR_SWEEP_MAX_DEG) / 2)
+           ? RADAR_SWEEP_MIN_DEG
+           : RADAR_SWEEP_MAX_DEG;
+}
 
-    if (t < half_ms) {
-        return RADAR_SWEEP_MIN_DEG + (int)(t * (uint32_t)span / half_ms);
+static int sweep_now_deg(int start_deg, int target_deg, int64_t t0_ms, int64_t now_ms)
+{
+    int span = target_deg - start_deg;
+    int abs_span = span >= 0 ? span : -span;
+    int64_t duration_ms = ((int64_t)abs_span * RADAR_ONE_WAY_MS) / (RADAR_SWEEP_MAX_DEG - RADAR_SWEEP_MIN_DEG);
+    if (duration_ms <= 0) {
+        return target_deg;
     }
-    return RADAR_SWEEP_MAX_DEG - (int)((t - half_ms) * (uint32_t)span / half_ms);
+
+    int64_t elapsed = now_ms - t0_ms;
+    if (elapsed >= duration_ms) {
+        return target_deg;
+    }
+    return start_deg + (int)((span * elapsed) / duration_ms);
+}
+
+static void begin_sweep(int *start_deg, int *target_deg, int *phase,
+                        int64_t *sweep_t0_ms, int current_deg, int64_t now_ms)
+{
+    *start_deg = current_deg;
+    if (current_deg == *target_deg) {
+        *target_deg = opposite_end(current_deg);
+    }
+    *sweep_t0_ms = now_ms;
+    *phase = RADAR_PHASE_SWEEP;
+    ESP_LOGI(TAG, "sweep %d -> %d", *start_deg, *target_deg);
 }
 
 static void radar_sweep_task(void *arg)
 {
     (void)arg;
 
-    TickType_t start = xTaskGetTickCount();
+    int deg = RADAR_SWEEP_MIN_DEG;
+    int start_deg = RADAR_SWEEP_MIN_DEG;
+    int target_deg = RADAR_SWEEP_MAX_DEG;
+    int phase = RADAR_PHASE_SWEEP;
     int last_deg = -1;
+    int64_t sweep_t0_ms = 0;
+    int64_t dwell_t0_ms = 0;
+    bool was_moving = false;
+
+    s_stopped_at_ms = esp_timer_get_time() / 1000;
+    s_need_start_delay = true;
 
     while (1) {
-        uint32_t elapsed_ms = pdTICKS_TO_MS(xTaskGetTickCount() - start);
-        int deg = sweep_degree(elapsed_ms);
+        int64_t now_ms = esp_timer_get_time() / 1000;
+        bool moving = s_vehicle_moving;
+
+        if (moving) {
+            if (!was_moving) {
+                ESP_LOGI(TAG, "hold at %d (vehicle moving)", deg);
+                was_moving = true;
+            }
+        } else {
+            if (was_moving) {
+                was_moving = false;
+            }
+
+            if (s_need_start_delay) {
+                if (now_ms - s_stopped_at_ms >= RADAR_START_DELAY_MS) {
+                    s_need_start_delay = false;
+                    begin_sweep(&start_deg, &target_deg, &phase, &sweep_t0_ms, deg, now_ms);
+                }
+            } else if (phase == RADAR_PHASE_DWELL) {
+                if (now_ms - dwell_t0_ms >= RADAR_END_REST_MS) {
+                    target_deg = opposite_end(deg);
+                    begin_sweep(&start_deg, &target_deg, &phase, &sweep_t0_ms, deg, now_ms);
+                }
+            } else {
+                deg = sweep_now_deg(start_deg, target_deg, sweep_t0_ms, now_ms);
+                if (deg == target_deg) {
+                    phase = RADAR_PHASE_DWELL;
+                    dwell_t0_ms = now_ms;
+                    ESP_LOGI(TAG, "dwell %d deg %d ms", deg, RADAR_END_REST_MS);
+                }
+            }
+        }
+
         if (deg != last_deg) {
             if (!radar_servo_set_deg(deg)) {
-                vTaskDelay(pdMS_TO_TICKS(RADAR_ROUNDTRIP_MS));
+                vTaskDelay(pdMS_TO_TICKS(RADAR_START_DELAY_MS));
                 continue;
             }
             last_deg = deg;
         }
         vTaskDelay(pdMS_TO_TICKS(RADAR_UPDATE_MS));
+    }
+}
+
+void rccar_radar_set_moving(bool moving)
+{
+    if (!s_inited) {
+        return;
+    }
+    if (s_vehicle_moving == moving) {
+        return;
+    }
+
+    s_vehicle_moving = moving;
+    if (!moving) {
+        s_stopped_at_ms = esp_timer_get_time() / 1000;
+        s_need_start_delay = true;
     }
 }
 
@@ -135,6 +225,9 @@ esp_err_t rccar_radar_init(void)
         return ret;
     }
 
+    s_vehicle_moving = false;
+    s_need_start_delay = true;
+    s_stopped_at_ms = esp_timer_get_time() / 1000;
     s_inited = true;
 
     BaseType_t task_ret = xTaskCreatePinnedToCore(
@@ -146,9 +239,9 @@ esp_err_t rccar_radar_init(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "init ok (pin %d, %d-%d deg roundtrip %d ms)",
+    ESP_LOGI(TAG, "init ok (pin %d, %d-%d deg, one-way %d ms, end rest %d ms, start delay %d ms)",
              (int)RCCAR_PIN_RADAR_SERVO,
              RADAR_SWEEP_MIN_DEG, RADAR_SWEEP_MAX_DEG,
-             RADAR_ROUNDTRIP_MS);
+             RADAR_ONE_WAY_MS, RADAR_END_REST_MS, RADAR_START_DELAY_MS);
     return ESP_OK;
 }
