@@ -407,13 +407,14 @@ static void input_process_task(void *arg) {
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
     static int64_t last_y_ms = 0;
-    static int64_t last_a_ms = 0;
+    static int64_t last_select_ms = 0;
     static int64_t last_b_ms = 0;
     static int64_t select_start_pressed_at = 0;
     static bool select_start_fired = false;
     static int64_t wheel_test_pressed_at = 0;
     static bool wheel_test_fired = false;
     static uint16_t prev_buttons = 0;
+    static uint8_t prev_misc_buttons = 0;
     static int64_t last_input_ms = 0;
     static bool failsafe_active = true;
 
@@ -427,6 +428,7 @@ static void input_process_task(void *arg) {
         if (!s_connected) {
             last_input_ms = 0;
             prev_buttons = 0;
+            prev_misc_buttons = 0;
             select_start_pressed_at = 0;
             select_start_fired = false;
             wheel_test_pressed_at = 0;
@@ -522,10 +524,12 @@ static void input_process_task(void *arg) {
             }
         }
 
-        /* A edge: 헤드라이트 토글 */
-        if ((evt.buttons & BUTTON_A) && !(prev_buttons & BUTTON_A)) {
-            if (now_ms - last_a_ms >= HEADLIGHT_DEBOUNCE_MS) {
-                last_a_ms = now_ms;
+        /* Select edge: 헤드라이트 토글. Start와 같이 누르면 공장초기화용이므로 무시 */
+        if ((evt.misc_buttons & MISC_BUTTON_SELECT) &&
+            !(prev_misc_buttons & MISC_BUTTON_SELECT) &&
+            !(evt.misc_buttons & MISC_BUTTON_START)) {
+            if (now_ms - last_select_ms >= HEADLIGHT_DEBOUNCE_MS) {
+                last_select_ms = now_ms;
                 rccar_headlight_toggle();
             }
         }
@@ -583,6 +587,7 @@ static void input_process_task(void *arg) {
         }
 
         prev_buttons = evt.buttons;
+        prev_misc_buttons = evt.misc_buttons;
     }
 }
 
