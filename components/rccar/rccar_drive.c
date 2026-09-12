@@ -54,6 +54,46 @@ int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone)
     return v;
 }
 
+/* tan(20°)≈0.364, tan(70°)≈2.747. 축 정렬에 가까운 입력은 그대로 둔다. */
+#define DIAG_RATIO_NUM  1000
+#define DIAG_TAN_LO     364
+#define DIAG_TAN_HI     2747
+#define DIAG_AXIS_GATE  48
+
+static bool in_diagonal_cone(int32_t ax, int32_t ay)
+{
+    return (ay * DIAG_RATIO_NUM >= ax * DIAG_TAN_LO) &&
+           (ay * DIAG_RATIO_NUM <= ax * DIAG_TAN_HI);
+}
+
+void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone)
+{
+    if (vx == NULL || vy == NULL) {
+        return;
+    }
+
+    int32_t ax = iabs(*vx);
+    int32_t ay = iabs(*vy);
+    int32_t mag = (ax > ay) ? ax : ay;
+    int32_t gate = DIAG_AXIS_GATE;
+    if (deadzone > 0 && deadzone < gate) {
+        gate = deadzone;
+    }
+
+    if (ax >= gate && ay >= gate && mag > deadzone && in_diagonal_cone(ax, ay)) {
+        *vx = (*vx < 0) ? -mag : mag;
+        *vy = (*vy < 0) ? -mag : mag;
+        return;
+    }
+
+    if (ax <= deadzone) {
+        *vx = 0;
+    }
+    if (ay <= deadzone) {
+        *vy = 0;
+    }
+}
+
 bool rccar_drive_idle_to_move(bool *was_moving, int64_t *idle_since_ms,
                               bool moving, int64_t now_ms, int64_t idle_need_ms)
 {

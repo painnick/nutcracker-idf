@@ -105,6 +105,35 @@ int main(void)
     expect_eq("dz -61", rccar_drive_apply_deadzone(-61, 60), -61);
     expect_eq("dz 100", rccar_drive_apply_deadzone(100, 60), 100);
 
+    printf("--- snap_diagonal ---\n");
+    {
+        int32_t x, y;
+        x = 400; y = 250;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("diag 400/250 x", x, 400);
+        expect_eq("diag 400/250 y", y, 400);
+
+        x = -300; y = 220;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("diag -300/220 x", x, -300);
+        expect_eq("diag -300/220 y", y, 300);
+
+        x = 400; y = 50;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("axis 400/50 x", x, 400);
+        expect_eq("axis 400/50 y", y, 0);
+
+        x = 0; y = 400;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("axis 0/400 x", x, 0);
+        expect_eq("axis 0/400 y", y, 400);
+
+        x = 40; y = 40;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("small 40/40 x", x, 0);
+        expect_eq("small 40/40 y", y, 0);
+    }
+
     printf("--- idle_to_move ---\n");
     {
         bool was = false;

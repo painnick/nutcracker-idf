@@ -23,6 +23,12 @@ void rccar_drive_mix(int32_t vx, int32_t vy, int32_t w, rccar_wheel_speeds_t *ou
 int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone);
 
 /**
+ * 우 스틱 평행이동용. 두 축이 모두 어느 정도 있고 각도가 대각선이면
+ * |vx|=|vy|로 맞춘다. 아니면 축별 데드존만 적용한다.
+ */
+void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone);
+
+/**
  * 휠 정지→출발 검출.
  * idle_since_ms 초기값 -1, was_moving 초기값 false.
  * 정지가 idle_need_ms 이상 이어진 뒤 움직이기 시작하면 true.

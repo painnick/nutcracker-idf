@@ -501,9 +501,12 @@ static void input_process_task(void *arg) {
         int32_t vx = STICK_VX_SIGN * rccar_drive_apply_deadzone(ay, AXIS_DEADZONE);
         int32_t w = STICK_W_SIGN * rccar_drive_apply_deadzone(ax, AXIS_DEADZONE);
 
-        /* Right stick: body-frame translation, no yaw */
-        vx += STICK_RY_VX_SIGN * rccar_drive_apply_deadzone(ary, AXIS_DEADZONE);
-        int32_t vy = STICK_VY_SIGN * rccar_drive_apply_deadzone(arx, AXIS_DEADZONE);
+        /* Right stick: body-frame translation, no yaw. 대각선 구간은 45°로 맞춘다. */
+        int32_t r_vx = STICK_RY_VX_SIGN * ary;
+        int32_t r_vy = STICK_VY_SIGN * arx;
+        rccar_drive_snap_diagonal(&r_vx, &r_vy, AXIS_DEADZONE);
+        vx += r_vx;
+        int32_t vy = r_vy;
 
         rccar_wheel_speeds_t wheels;
         rccar_drive_mix(vx, vy, w, &wheels);
