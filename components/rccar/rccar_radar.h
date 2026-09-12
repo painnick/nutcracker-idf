@@ -15,7 +15,7 @@ extern "C" {
 
 esp_err_t rccar_radar_init(void);
 
-/** @brief 휠이 움직이면 서보를 멈추고, 정지하면 5초 뒤 왕복을 재개한다. */
+/** @brief 휠이 움직이면 편도 종료 후 멈추고, 정지하면 5초 뒤 왕복을 재개한다. */
 void rccar_radar_set_moving(bool moving);
 
 #ifdef __cplusplus
