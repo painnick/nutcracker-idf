@@ -15,7 +15,7 @@ extern "C" {
 
 #define RCCAR_DFPLAYER_TRACK_IDLE    1 /* 0001.mp3 대기 반복 */
 #define RCCAR_DFPLAYER_TRACK_GUN     2 /* 0002.mp3 포 발사 */
-#define RCCAR_DFPLAYER_TRACK_MG      3 /* 0003.mp3 (v1 미사용 가능) */
+#define RCCAR_DFPLAYER_TRACK_MG      3 /* 0003.mp3 개틀링 */
 #define RCCAR_DFPLAYER_TRACK_CONNECT 4 /* 0004.mp3 게임패드 연결 */
 
 esp_err_t rccar_dfplayer_init(void);

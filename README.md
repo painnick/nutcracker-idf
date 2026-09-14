@@ -15,7 +15,8 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 포탑 회전 | D-Pad 좌/우 → DRV8833 3번째 칩 (MCPWM) |
 | 가습기 | GPIO4, X 버튼 시 2초 ON, 1초 이상 정지 후 출발 시 1초 ON. 네오픽셀 주황 유지 후 흰색 전환 |
 | 네오픽셀 | WS2812 8개 (GPIO13), Y 버튼 엔진 idle 효과 토글 |
-| 레이저 | GPIO15, B 버튼 발사 (0002.mp3 + LED, 후좌 없음) |
+| 레이저 | GPIO15, B 포 발사 (0002.mp3 + LED) |
+| 개틀링 | GPIO12, A 발사 (0003.mp3 + LED 점멸) |
 | 헤드라이트 | GPIO14, SELECT 버튼 ON/OFF 토글 (HIGH=ON) |
 | 레이더 서보 | GPIO32, 정지 5초 후 동작. 0°↔180° 편도 3초, 끝에서 1초 후 PWM 해제. 주행 중이어도 편도는 끝까지 |
 | 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
@@ -44,6 +45,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 가습기 MOSFET/릴레이 | 4 | HIGH=ON |
 | 네오픽셀 DATA | 13 | WS2812 x8 |
 | 레이저 LED | 15 | LOW=ON (MOSFET) |
+| 개틀링 LED | 12 | HIGH=ON. 리셋 시 LOW 유지 (MTDI 스트래핑) |
 | 헤드라이트 LED | 14 | HIGH=ON |
 | 레이더 서보 | 32 | LEDC 50 Hz, 정지 시에만 왕복 |
 | DFPlayer TX | 5 | UART TX |
@@ -59,6 +61,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | X | 패드 럼블 (500ms) + 가습기 2초 ON |
 | 1초 이상 정지 후 출발 | 가습기 + 네오픽셀 1초 ON (배기 효과) |
 | Y | 네오픽셀 엔진 idle 효과 ON/OFF 토글 |
+| A | 개틀링 발사 (0003.mp3 + LED 점멸) |
 | Select | 헤드라이트 ON/OFF 토글 |
 | B | 레이저 발사 (효과음 + LED 점등) |
 | L1 / R1 | 볼륨 감소 / 증가 (NVS 저장) |

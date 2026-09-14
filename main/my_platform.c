@@ -42,6 +42,10 @@
 #define NEOPIXEL_DEBOUNCE_MS 400
 #define HEADLIGHT_DEBOUNCE_MS 400
 #define LASER_DEBOUNCE_MS 400
+#define GATLING_DEBOUNCE_MS 400
+#define GATLING_RUMBLE_DURATION_MS 300
+#define GATLING_RUMBLE_WEAK 150
+#define GATLING_RUMBLE_STRONG 200
 #define GUN_FIRE_DELAY_MS 400
 #define GUN_RUMBLE_DURATION_MS 400
 #define GUN_RUMBLE_WEAK 150
@@ -179,6 +183,12 @@ static void handle_x_button_press(uni_hid_device_t *d) {
         d->report_parser.play_dual_rumble(d, 0, X_RUMBLE_DURATION_MS, X_RUMBLE_WEAK, X_RUMBLE_STRONG);
     esp_timer_stop(humidifier_pulse_timer);
     esp_timer_start_once(humidifier_pulse_timer, (uint64_t)X_RUMBLE_DURATION_MS * 1000ULL);
+}
+
+static void handle_a_button_gatling(uni_hid_device_t *d) {
+    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_MG);
+    rccar_laser_gatling();
+    request_rumble(d, GATLING_RUMBLE_DURATION_MS, GATLING_RUMBLE_WEAK, GATLING_RUMBLE_STRONG);
 }
 
 static void handle_b_button_fire(uni_hid_device_t *d) {
@@ -409,6 +419,7 @@ static void input_process_task(void *arg) {
     static int64_t last_l1_ms = 0;
     static int64_t last_r1_ms = 0;
     static int64_t last_y_ms = 0;
+    static int64_t last_a_ms = 0;
     static int64_t last_select_ms = 0;
     static int64_t last_b_ms = 0;
     static int64_t select_start_pressed_at = 0;
@@ -528,6 +539,14 @@ static void input_process_task(void *arg) {
             if (now_ms - last_y_ms >= NEOPIXEL_DEBOUNCE_MS) {
                 last_y_ms = now_ms;
                 rccar_neopixel_toggle();
+            }
+        }
+
+        /* A edge: 개틀링 발사 (효과음 + LED 점멸) */
+        if ((evt.buttons & BUTTON_A) && !(prev_buttons & BUTTON_A)) {
+            if (now_ms - last_a_ms >= GATLING_DEBOUNCE_MS) {
+                last_a_ms = now_ms;
+                handle_a_button_gatling(evt.device);
             }
         }
 

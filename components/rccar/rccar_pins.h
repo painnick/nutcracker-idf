@@ -41,6 +41,10 @@ extern "C" {
 #define RCCAR_PIN_LASER (GPIO_NUM_15)
 #define RCCAR_LASER_ACTIVE_LOW 1
 
+/* 개틀링 LED (HIGH=ON). GPIO12(MTDI)는 리셋 시 LOW여야 3.3V 플래시 */
+#define RCCAR_PIN_GATLING (GPIO_NUM_12)
+#define RCCAR_GATLING_ACTIVE_LOW 0
+
 /* DFPlayer Mini UART TX */
 #define RCCAR_PIN_SOUND_TX (GPIO_NUM_5)
 #define RCCAR_PIN_SOUND_RX (GPIO_NUM_NC)
