@@ -48,7 +48,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 개틀링 LED | 12 | HIGH=ON. 리셋 시 LOW 유지 (MTDI 스트래핑) |
 | 헤드라이트 LED | 14 | HIGH=ON |
 | 레이더 서보 | 32 | LEDC 50 Hz, 정지 시에만 왕복 |
-| DFPlayer TX | 5 | UART TX |
+| DFPlayer TX | 23 | UART TX |
 
 ## 게임패드 조작
 
@@ -101,7 +101,7 @@ TV 쪽이 보드 **앞(top)** 센서입니다. 앞으로 기울이면 전진, �
 
 - **DRV8833 3개**: #1 전륜(FL/FR), #2 후륜(RL/RR), #3 포탑. DC 모터는 전부 MCPWM (LEDC 사용 안 함).
 - **ESP32 MCPWM**: 그룹당 operator 최대 3. 모터 5채널은 group 0에 3개 + group 1에 2개로 배치.
-- **DFPlayer**: TX 전용 (GPIO 5 → 모듈 RX). 수신 핀 미사용.
+- **DFPlayer**: TX 전용 (GPIO 23 → 모듈 RX). 수신 핀 미사용.
 - 모터 전원과 로직 전원을 분리하고, 공통 GND를 확실히 연결할 것.
 
 ## 소프트웨어 구조

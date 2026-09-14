@@ -46,7 +46,7 @@ extern "C" {
 #define RCCAR_GATLING_ACTIVE_LOW 0
 
 /* DFPlayer Mini UART TX */
-#define RCCAR_PIN_SOUND_TX (GPIO_NUM_5)
+#define RCCAR_PIN_SOUND_TX (GPIO_NUM_23)
 #define RCCAR_PIN_SOUND_RX (GPIO_NUM_NC)
 
 /* 헤드라이트 LED (HIGH=ON) */
