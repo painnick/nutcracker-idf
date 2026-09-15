@@ -46,7 +46,7 @@
 #define GATLING_RUMBLE_DURATION_MS 300
 #define GATLING_RUMBLE_WEAK 150
 #define GATLING_RUMBLE_STRONG 200
-#define GUN_FIRE_DELAY_MS 400
+#define GUN_FIRE_DELAY_MS 200
 #define GUN_RUMBLE_DURATION_MS 400
 #define GUN_RUMBLE_WEAK 150
 #define GUN_RUMBLE_STRONG 255
@@ -192,7 +192,6 @@ static void handle_a_button_gatling(uni_hid_device_t *d) {
 }
 
 static void handle_b_button_fire(uni_hid_device_t *d) {
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_GUN);
     rccar_laser_fire();
     laser_rumble_device = d;
     esp_timer_stop(laser_rumble_timer);
@@ -203,8 +202,10 @@ static void laser_rumble_cb(void *arg) {
     (void)arg;
     uni_hid_device_t *d = laser_rumble_device;
     laser_rumble_device = NULL;
-    if (d != NULL)
+    if (d != NULL) {
+        rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_GUN);
         request_rumble(d, GUN_RUMBLE_DURATION_MS, GUN_RUMBLE_WEAK, GUN_RUMBLE_STRONG);
+    }
 }
 
 static void request_rumble(uni_hid_device_t *d, uint16_t duration_ms, uint8_t weak, uint8_t strong) {

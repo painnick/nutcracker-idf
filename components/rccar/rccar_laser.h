@@ -13,7 +13,7 @@ extern "C" {
 
 esp_err_t rccar_laser_init(void);
 
-/** @brief 포 발사 시퀀스 (LED 점등 후 자동 소등, 후좌 없음) */
+/** @brief 포 발사 LED (즉시 점등, 1.2초 유지) */
 void rccar_laser_fire(void);
 
 /** @brief 개틀링 점멸 (약 0.5초, 75ms 간격) */

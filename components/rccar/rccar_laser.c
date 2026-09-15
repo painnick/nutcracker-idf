@@ -11,15 +11,13 @@
 
 static const char *TAG = "rccar_laser";
 
-/* panzer4/king-tiger GUN_DELAY_MS, GUN_RETURN_WAIT_MS (후륜 밀림 타이밍은 제외) */
-#define LASER_LED_DELAY_MS   400
-#define LASER_LED_ON_MS      200
+/* LED는 발사 즉시 켜고, 효과음보다 0.2초 빠르게 맞춘다. */
+#define LASER_LED_ON_MS      1200
 #define GATLING_BLINK_MS     75
 #define GATLING_FIRE_MS      500
 
 static bool s_inited = false;
 static bool s_gatling_on = false;
-static esp_timer_handle_t s_led_on_timer = NULL;
 static esp_timer_handle_t s_led_off_timer = NULL;
 static esp_timer_handle_t s_gatling_blink_timer = NULL;
 static esp_timer_handle_t s_gatling_stop_timer = NULL;
@@ -44,7 +42,6 @@ static void apply_gatling_gpio(bool on)
 
 static void cancel_cannon(void)
 {
-    esp_timer_stop(s_led_on_timer);
     esp_timer_stop(s_led_off_timer);
 }
 
@@ -59,14 +56,6 @@ static void led_off_timer_cb(void *arg)
 {
     (void)arg;
     apply_gpio(false);
-}
-
-static void led_on_timer_cb(void *arg)
-{
-    (void)arg;
-    apply_gpio(true);
-    esp_timer_stop(s_led_off_timer);
-    esp_timer_start_once(s_led_off_timer, (uint64_t)LASER_LED_ON_MS * 1000ULL);
 }
 
 static void gatling_blink_cb(void *arg)
@@ -121,18 +110,6 @@ esp_err_t rccar_laser_init(void)
         return ret;
     }
 
-    const esp_timer_create_args_t on_args = {
-        .callback = &led_on_timer_cb,
-        .arg = NULL,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "laser_on",
-    };
-    ret = esp_timer_create(&on_args, &s_led_on_timer);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "esp_timer_create on %s", esp_err_to_name(ret));
-        return ret;
-    }
-
     const esp_timer_create_args_t off_args = {
         .callback = &led_off_timer_cb,
         .arg = NULL,
@@ -172,8 +149,8 @@ esp_err_t rccar_laser_init(void)
     apply_gpio(false);
     apply_gatling_gpio(false);
     s_inited = true;
-    ESP_LOGI(TAG, "laser init ok (cannon gpio %d, gatling gpio %d, gatling %d ms)",
-             (int)RCCAR_PIN_LASER, (int)RCCAR_PIN_GATLING, GATLING_FIRE_MS);
+    ESP_LOGI(TAG, "laser init ok (cannon gpio %d on %d ms, gatling gpio %d, gatling %d ms)",
+             (int)RCCAR_PIN_LASER, LASER_LED_ON_MS, (int)RCCAR_PIN_GATLING, GATLING_FIRE_MS);
     return ESP_OK;
 }
 
@@ -184,8 +161,8 @@ void rccar_laser_fire(void)
     }
 
     cancel_cannon();
-    apply_gpio(false);
-    esp_timer_start_once(s_led_on_timer, (uint64_t)LASER_LED_DELAY_MS * 1000ULL);
+    apply_gpio(true);
+    esp_timer_start_once(s_led_off_timer, (uint64_t)LASER_LED_ON_MS * 1000ULL);
 }
 
 void rccar_laser_gatling(void)
