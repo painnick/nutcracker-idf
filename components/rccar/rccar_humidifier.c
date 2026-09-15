@@ -3,6 +3,7 @@
  * @brief 가습기 모듈 GPIO (GPIO4, HIGH=ON)
  */
 #include "rccar_humidifier.h"
+#include "rccar_dfplayer.h"
 #include "rccar_neopixel.h"
 #include "rccar_pins.h"
 
@@ -77,6 +78,9 @@ void rccar_humidifier_set(bool on)
         apply_gpio(on);
         ESP_LOGI(TAG, "humidifier %s (pin %d, level=%d)", on ? "ON" : "OFF",
                  (int)RCCAR_PIN_HUMIDIFIER, on ? 1 : 0);
+        if (on) {
+            rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_NITRO);
+        }
     }
     rccar_neopixel_mist_set(on);
 }
