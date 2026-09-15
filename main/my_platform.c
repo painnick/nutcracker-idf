@@ -39,7 +39,7 @@
 #define FAILSAFE_MS 1000
 #define TURRET_SPEED 384
 #define DEBOUNCE_MS 100
-#define NEOPIXEL_DEBOUNCE_MS 400
+#define RADAR_DEBOUNCE_MS 400
 #define HEADLIGHT_DEBOUNCE_MS 400
 #define LASER_DEBOUNCE_MS 400
 #define GATLING_DEBOUNCE_MS 400
@@ -446,6 +446,7 @@ static void input_process_task(void *arg) {
             select_start_fired = false;
             wheel_test_pressed_at = 0;
             wheel_test_fired = false;
+            rccar_radar_set_enabled(false);
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -472,6 +473,7 @@ static void input_process_task(void *arg) {
         /* Re-check after receive: disconnect may race with queue read */
         if (!s_connected) {
             last_input_ms = 0;
+            rccar_radar_set_enabled(false);
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -534,11 +536,11 @@ static void input_process_task(void *arg) {
         rccar_motor_turret_set(turret);
         } /* !wheel_test */
 
-        /* Y edge: 네오픽셀 엔진 효과 토글 */
+        /* Y edge: 레이더 서보 ON/OFF 토글 (기본 OFF) */
         if ((evt.buttons & BUTTON_Y) && !(prev_buttons & BUTTON_Y)) {
-            if (now_ms - last_y_ms >= NEOPIXEL_DEBOUNCE_MS) {
+            if (now_ms - last_y_ms >= RADAR_DEBOUNCE_MS) {
                 last_y_ms = now_ms;
-                rccar_neopixel_toggle();
+                rccar_radar_toggle();
             }
         }
 
@@ -779,6 +781,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     esp_timer_stop(laser_rumble_timer);
     laser_rumble_device = NULL;
     failsafe_stop();
+    rccar_radar_set_enabled(false);
     if (input_queue != NULL)
         xQueueReset(input_queue);
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);

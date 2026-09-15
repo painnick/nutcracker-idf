@@ -1,7 +1,8 @@
 /**
  * @file rccar_radar.c
- * @brief 레이더 서보. 정지 5초 후 0°↔180° 편도 3초, 끝에서 1초 후 PWM 해제.
- *        끝에서 3초 휴식. 주행이 시작돼도 진행 중인 편도는 끝까지 간다.
+ * @brief 레이더 서보. 기본 OFF. Y로 ON이면 PWM을 붙이고, Y OFF 또는 패드 해제 때 뗀다.
+ *        ON이고 정지 5초 후면 0°↔180° 편도 3초, 끝에서 3초 휴식.
+ *        주행이 시작돼도 진행 중인 편도는 끝까지 간다. ON인 동안은 정지해도 PWM을 유지한다.
  */
 #include "rccar_radar.h"
 #include "rccar_pins.h"
@@ -9,7 +10,9 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
+#include "esp_rom_gpio.h"
 #include "esp_timer.h"
+#include "soc/gpio_sig_map.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -30,8 +33,7 @@ static const char *TAG = "rccar_radar";
 #define RADAR_SWEEP_MAX_DEG  180
 #define RADAR_ONE_WAY_MS     3000
 #define RADAR_END_REST_MS    3000
-#define RADAR_DETACH_MS      1000
-#define RADAR_REATTACH_HOLD_MS 60
+#define RADAR_SWEEP_HOLD_MS  60
 #define RADAR_START_DELAY_MS 5000
 #define RADAR_UPDATE_MS      20
 #define RADAR_TASK_STACK     4096
@@ -44,9 +46,9 @@ enum {
 };
 
 static bool s_inited = false;
-static bool s_channel_ready = false;
 static bool s_attached = false;
 static TaskHandle_t s_task = NULL;
+static volatile bool s_enabled = false;
 static volatile bool s_vehicle_moving = false;
 static volatile bool s_need_start_delay = true;
 static volatile int64_t s_stopped_at_ms = 0;
@@ -88,33 +90,21 @@ static bool radar_servo_attach(int degree)
         return true;
     }
 
+    /* 듀티를 먼저 쓴 뒤 GPIO에 연결한다. 0 듀티로 붙이면 0°로 튄다. */
     uint32_t duty = degree_to_duty(degree);
-    if (!s_channel_ready) {
-        ledc_channel_config_t ch_config = {
-            .gpio_num = RCCAR_PIN_RADAR_SERVO,
-            .speed_mode = LEDC_MODE,
-            .channel = LEDC_CHANNEL,
-            .intr_type = LEDC_INTR_DISABLE,
-            .timer_sel = LEDC_TIMER,
-            .duty = duty,
-            .hpoint = 0,
-        };
-        esp_err_t ret = ledc_channel_config(&ch_config);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "attach failed: %s", esp_err_to_name(ret));
-            return false;
-        }
-        s_channel_ready = true;
-    } else {
-        /* ledc_stop idle LOW는 쓰지 않는다. 핀을 떼기 전에 0으로 떨어지면 180°에서 0°로 튄다. */
-        if (!radar_servo_apply_duty(degree)) {
-            return false;
-        }
-        esp_err_t ret = ledc_set_pin((int)RCCAR_PIN_RADAR_SERVO, LEDC_MODE, LEDC_CHANNEL);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "attach pin failed: %s", esp_err_to_name(ret));
-            return false;
-        }
+    ledc_channel_config_t ch_config = {
+        .gpio_num = RCCAR_PIN_RADAR_SERVO,
+        .speed_mode = LEDC_MODE,
+        .channel = LEDC_CHANNEL,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER,
+        .duty = duty,
+        .hpoint = 0,
+    };
+    esp_err_t ret = ledc_channel_config(&ch_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "attach failed: %s", esp_err_to_name(ret));
+        return false;
     }
 
     s_attached = true;
@@ -128,10 +118,11 @@ static void radar_servo_detach(void)
         return;
     }
 
-    /* LEDC 출력을 핀에서 먼저 분리한다. ledc_stop(..., 0)은 핀이 붙은 채 LOW가 된다. */
-    gpio_reset_pin(RCCAR_PIN_RADAR_SERVO);
+    /* gpio_reset_pin은 풀업을 켠다. LEDC만 끊고 Hi-Z로 둔다. */
+    esp_rom_gpio_connect_out_signal((uint32_t)RCCAR_PIN_RADAR_SERVO, SIG_GPIO_OUT_IDX, false, false);
     gpio_set_direction(RCCAR_PIN_RADAR_SERVO, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(RCCAR_PIN_RADAR_SERVO, GPIO_FLOATING);
+    gpio_pullup_dis(RCCAR_PIN_RADAR_SERVO);
+    gpio_pulldown_dis(RCCAR_PIN_RADAR_SERVO);
     s_attached = false;
     ESP_LOGI(TAG, "servo detached");
 }
@@ -179,8 +170,7 @@ static void begin_sweep(int *start_deg, int *target_deg, int *phase,
         return;
     }
     *last_deg = current_deg;
-    /* 50 Hz 몇 주기 동안 시작 각도를 유지한 뒤 왕복을 시작한다. */
-    vTaskDelay(pdMS_TO_TICKS(RADAR_REATTACH_HOLD_MS));
+    vTaskDelay(pdMS_TO_TICKS(RADAR_SWEEP_HOLD_MS));
     *sweep_t0_ms = esp_timer_get_time() / 1000;
     *phase = RADAR_PHASE_SWEEP;
     ESP_LOGI(TAG, "sweep %d -> %d", *start_deg, *target_deg);
@@ -215,19 +205,33 @@ static void radar_sweep_task(void *arg)
 
     s_stopped_at_ms = esp_timer_get_time() / 1000;
     s_need_start_delay = true;
-    radar_servo_detach();
 
     while (1) {
         int64_t now_ms = esp_timer_get_time() / 1000;
+
+        if (!s_enabled) {
+            if (s_attached) {
+                radar_servo_detach();
+            }
+            phase = RADAR_PHASE_IDLE;
+            vTaskDelay(pdMS_TO_TICKS(RADAR_UPDATE_MS));
+            continue;
+        }
+
+        if (!s_attached && !radar_servo_attach(deg)) {
+            vTaskDelay(pdMS_TO_TICKS(RADAR_UPDATE_MS));
+            continue;
+        }
 
         if (phase == RADAR_PHASE_SWEEP) {
             deg = sweep_now_deg(start_deg, target_deg, sweep_t0_ms, now_ms);
             if (deg != last_deg) {
                 if (!radar_servo_set_deg(deg)) {
-                    vTaskDelay(pdMS_TO_TICKS(RADAR_START_DELAY_MS));
-                    continue;
+                    /* 실패 동안 벽시계를 그대로 두면 다음 틱에 각도가 점프한다. */
+                    sweep_t0_ms += RADAR_UPDATE_MS;
+                } else {
+                    last_deg = deg;
                 }
-                last_deg = deg;
             }
             if (deg == target_deg) {
                 phase = RADAR_PHASE_DWELL;
@@ -235,24 +239,14 @@ static void radar_sweep_task(void *arg)
                 ESP_LOGI(TAG, "arrived %d deg", deg);
             }
         } else if (phase == RADAR_PHASE_DWELL) {
-            if (s_attached && (now_ms - dwell_t0_ms >= RADAR_DETACH_MS)) {
-                radar_servo_detach();
-                last_deg = -1;
-            }
             if (!s_vehicle_moving &&
                 (now_ms - dwell_t0_ms >= RADAR_END_REST_MS) &&
                 start_delay_done(now_ms)) {
                 target_deg = opposite_end(deg);
                 begin_sweep(&start_deg, &target_deg, &phase, &sweep_t0_ms, &last_deg, deg);
             }
-        } else {
-            if (s_attached) {
-                radar_servo_detach();
-                last_deg = -1;
-            }
-            if (start_delay_done(now_ms)) {
-                begin_sweep(&start_deg, &target_deg, &phase, &sweep_t0_ms, &last_deg, deg);
-            }
+        } else if (start_delay_done(now_ms)) {
+            begin_sweep(&start_deg, &target_deg, &phase, &sweep_t0_ms, &last_deg, deg);
         }
 
         vTaskDelay(pdMS_TO_TICKS(RADAR_UPDATE_MS));
@@ -275,6 +269,33 @@ void rccar_radar_set_moving(bool moving)
     }
 }
 
+void rccar_radar_set_enabled(bool enabled)
+{
+    if (!s_inited) {
+        return;
+    }
+    if (s_enabled == enabled) {
+        return;
+    }
+
+    s_enabled = enabled;
+    if (enabled && !s_vehicle_moving) {
+        s_stopped_at_ms = esp_timer_get_time() / 1000;
+        s_need_start_delay = true;
+    }
+    ESP_LOGI(TAG, "%s", enabled ? "on" : "off");
+}
+
+void rccar_radar_toggle(void)
+{
+    rccar_radar_set_enabled(!s_enabled);
+}
+
+bool rccar_radar_is_enabled(void)
+{
+    return s_enabled;
+}
+
 esp_err_t rccar_radar_init(void)
 {
     if (s_inited) {
@@ -294,8 +315,8 @@ esp_err_t rccar_radar_init(void)
         return ret;
     }
 
-    s_channel_ready = false;
     s_attached = false;
+    s_enabled = false;
     s_vehicle_moving = false;
     s_need_start_delay = true;
     s_stopped_at_ms = esp_timer_get_time() / 1000;
@@ -310,9 +331,9 @@ esp_err_t rccar_radar_init(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "init ok (pin %d, %d-%d deg, one-way %d ms, detach %d ms, end rest %d ms, start delay %d ms)",
+    ESP_LOGI(TAG, "init ok (pin %d, %d-%d deg, one-way %d ms, end rest %d ms, start delay %d ms, pwm on Y, default off)",
              (int)RCCAR_PIN_RADAR_SERVO,
              RADAR_SWEEP_MIN_DEG, RADAR_SWEEP_MAX_DEG,
-             RADAR_ONE_WAY_MS, RADAR_DETACH_MS, RADAR_END_REST_MS, RADAR_START_DELAY_MS);
+             RADAR_ONE_WAY_MS, RADAR_END_REST_MS, RADAR_START_DELAY_MS);
     return ESP_OK;
 }
