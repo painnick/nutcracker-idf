@@ -189,6 +189,7 @@ esp_err_t rccar_dfplayer_play(uint8_t track)
     if (track < 1) {
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_LOGD(TAG, "play track %u", (unsigned)track);
     /* PLAY(0x03): param = track number */
     return dfplayer_send_cmd(DFPLAYER_CMD_PLAY, (uint8_t)((uint16_t)track >> 8),
                              (uint8_t)(track & 0xFF));
@@ -199,6 +200,7 @@ esp_err_t rccar_dfplayer_play_loop(uint8_t track)
     if (track < 1) {
         return ESP_ERR_INVALID_ARG;
     }
+    ESP_LOGD(TAG, "play_loop track %u", (unsigned)track);
     /* 0x08: Playback Mode (Single Track Loop) */
     return dfplayer_send_cmd(DFPLAYER_CMD_PLAYBACK_MODE, (uint8_t)((uint16_t)track >> 8),
                              (uint8_t)(track & 0xFF));
