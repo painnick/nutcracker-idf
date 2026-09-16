@@ -19,7 +19,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | 개틀링 | GPIO12, A 발사 (0003.mp3 + LED 점멸) |
 | 헤드라이트 | GPIO14, SELECT 버튼 ON/OFF 토글 (HIGH=ON) |
 | 레이더 서보 | GPIO32, Y 버튼 ON/OFF (기본 OFF). Y로 켤 때 PWM 연결, Y로 끄거나 패드 해제 때 끊음. ON이고 정지 5초 후면 동작. 0°↔180° 편도 3초, 끝에서 3초 휴식. 주행 중이어도 편도는 끝까지 |
-| 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장 |
+| 사운드 | DFPlayer Mini (UART TX), L1/R1 볼륨, NVS 저장. 연결 중 30초간 조작 없으면 30초마다 0006~0009 중 하나 |
 | 페일세이프 | 연결 해제 또는 약 1초 리포트 없음 → 전 모터 정지 |
 | 패드 피드백 | 연결 시 진동, 상태별 효과음 (IDLE / CONNECT) |
 
@@ -69,6 +69,7 @@ panzer4-idf(RC 탱크)를 포크한 뒤 탱크 전용 모듈을 카용 `componen
 | Select + Start (3초) | NVS 설정 초기화 후 재시작 |
 | 연결 해제 또는 약 1초 리포트 없음 | 페일세이프: 전 모터 0 |
 | 연결 성공 | 패드 럼블 (400ms) |
+| 연결 중 30초간 조작 없음 | 30초마다 BGM 0006~0009 중 하나 재생 |
 
 ### Wii Balance Board
 

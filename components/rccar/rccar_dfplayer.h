@@ -18,6 +18,8 @@ extern "C" {
 #define RCCAR_DFPLAYER_TRACK_MG      3 /* 0003.mp3 개틀링 */
 #define RCCAR_DFPLAYER_TRACK_CONNECT 4 /* 0004.mp3 게임패드 연결 */
 #define RCCAR_DFPLAYER_TRACK_NITRO   5 /* 0005.mp3 니트로 액션 */
+#define RCCAR_DFPLAYER_TRACK_BGM_MIN 6 /* 0006.mp3 ~ 0009.mp3 연결 중 대기 BGM */
+#define RCCAR_DFPLAYER_TRACK_BGM_MAX 9
 
 esp_err_t rccar_dfplayer_init(void);
 

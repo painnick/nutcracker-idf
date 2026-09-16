@@ -18,6 +18,7 @@
 #include "uni_common.h"
 
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -91,6 +92,7 @@ static const char *DRIVE_LOG_TAG = "drive_dbg";
    점유해서, 컨트롤러가 스스로 재연결하려는 순간에 켜면 그 절차를 방해한다.
    Xbox Wireless 계열은 링크가 살아 있어도 새 연결을 여는 특성이 있다. */
 #define SCAN_RESTART_DELAY_MS 2000
+#define CONNECTED_IDLE_BGM_US (30 * 1000 * 1000)
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
@@ -116,6 +118,7 @@ static my_platform_instance_t *get_my_platform_instance(uni_hid_device_t *d);
 static QueueHandle_t input_queue = NULL;
 static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
+static esp_timer_handle_t connected_idle_bgm_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
 static esp_timer_handle_t gamepad_effect_timer = NULL;
 static esp_timer_handle_t gamepad_keepalive_timer = NULL;
@@ -226,6 +229,48 @@ static void rumble_on_btstack_thread(void *context) {
 static void waiting_idle_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
+}
+
+static void connected_idle_bgm_reset(void)
+{
+    if (connected_idle_bgm_timer == NULL) {
+        return;
+    }
+    esp_timer_stop(connected_idle_bgm_timer);
+    if (s_connected) {
+        esp_timer_start_periodic(connected_idle_bgm_timer, CONNECTED_IDLE_BGM_US);
+    }
+}
+
+static void connected_idle_bgm_cb(void *arg)
+{
+    (void)arg;
+    if (!s_connected) {
+        return;
+    }
+
+    static uint8_t last_track = 0;
+    uint8_t span = (uint8_t)(RCCAR_DFPLAYER_TRACK_BGM_MAX - RCCAR_DFPLAYER_TRACK_BGM_MIN + 1);
+    uint8_t track = (uint8_t)(RCCAR_DFPLAYER_TRACK_BGM_MIN + (esp_random() % span));
+    if (span > 1 && track == last_track) {
+        track = (uint8_t)(RCCAR_DFPLAYER_TRACK_BGM_MIN + ((track - RCCAR_DFPLAYER_TRACK_BGM_MIN + 1) % span));
+    }
+    last_track = track;
+    rccar_dfplayer_play(track);
+}
+
+static bool evt_has_control_activity(const input_event_t *evt)
+{
+    if (evt->buttons != 0 || evt->misc_buttons != 0 || evt->dpad != 0) {
+        return true;
+    }
+    if (rccar_drive_apply_deadzone(evt->axis_x, AXIS_DEADZONE) != 0 ||
+        rccar_drive_apply_deadzone(evt->axis_y, AXIS_DEADZONE) != 0 ||
+        rccar_drive_apply_deadzone(evt->axis_rx, AXIS_DEADZONE) != 0 ||
+        rccar_drive_apply_deadzone(evt->axis_ry, AXIS_DEADZONE) != 0) {
+        return true;
+    }
+    return false;
 }
 
 /* 연결 효과음. btstack 스레드(on_device_ready)에서 UART를 쓰면 링크가 끊길 수 있어
@@ -484,6 +529,10 @@ static void input_process_task(void *arg) {
 
         failsafe_active = false;
 
+        if (evt_has_control_activity(&evt)) {
+            connected_idle_bgm_reset();
+        }
+
         /* L1 + R1 hold: 개별 휠 테스트 (차량을 들어 올린 상태에서 사용) */
         uint8_t l1 = (evt.buttons & BUTTON_SHOULDER_L) ? 1 : 0;
         uint8_t r1 = (evt.buttons & BUTTON_SHOULDER_R) ? 1 : 0;
@@ -662,6 +711,14 @@ static void my_platform_init(int argc, const char **argv) {
     };
     esp_timer_create(&waiting_idle_args, &waiting_idle_timer);
 
+    const esp_timer_create_args_t connected_idle_bgm_args = {
+        .callback = &connected_idle_bgm_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "connected_idle_bgm",
+    };
+    esp_timer_create(&connected_idle_bgm_args, &connected_idle_bgm_timer);
+
     const esp_timer_create_args_t connect_sound_args = {
         .callback = &connect_sound_cb,
         .arg = NULL,
@@ -785,6 +842,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     rccar_radar_set_enabled(false);
     if (input_queue != NULL)
         xQueueReset(input_queue);
+    connected_idle_bgm_reset();
     rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 
@@ -826,6 +884,7 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     gamepad_keepalive_start(d);
 
     s_connected = true;
+    connected_idle_bgm_reset();
     return UNI_ERROR_SUCCESS;
 }
 
