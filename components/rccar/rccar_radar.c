@@ -7,6 +7,8 @@
 #include "rccar_radar.h"
 #include "rccar_pins.h"
 
+#include <stdint.h>
+
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
@@ -22,7 +24,7 @@ static const char *TAG = "rccar_radar";
 #define LEDC_TIMER           LEDC_TIMER_0
 #define LEDC_MODE            LEDC_LOW_SPEED_MODE
 #define LEDC_CHANNEL         LEDC_CHANNEL_0
-#define LEDC_DUTY_RES        LEDC_TIMER_10_BIT
+#define LEDC_DUTY_RES        LEDC_TIMER_14_BIT
 #define LEDC_FREQ_HZ         50
 
 #define SERVO_PULSE_MIN_US   500
@@ -65,7 +67,7 @@ static uint32_t degree_to_duty(int degree)
     uint32_t us = SERVO_PULSE_MIN_US +
                   (SERVO_PULSE_MAX_US - SERVO_PULSE_MIN_US) * (uint32_t)degree / SERVO_DEGREE_RANGE;
     uint32_t max_duty = (1U << LEDC_DUTY_RES) - 1;
-    return (us * LEDC_FREQ_HZ * max_duty) / 1000000U;
+    return (uint32_t)(((uint64_t)us * LEDC_FREQ_HZ * max_duty) / 1000000U);
 }
 
 static bool radar_servo_apply_duty(int degree)
@@ -331,8 +333,8 @@ esp_err_t rccar_radar_init(void)
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "init ok (pin %d, %d-%d deg, one-way %d ms, end rest %d ms, start delay %d ms, pwm on Y, default off)",
-             (int)RCCAR_PIN_RADAR_SERVO,
+    ESP_LOGI(TAG, "init ok (pin %d, %d-bit %d Hz, %d-%d deg, one-way %d ms, end rest %d ms, start delay %d ms, pwm on Y, default off)",
+             (int)RCCAR_PIN_RADAR_SERVO, (int)LEDC_DUTY_RES, LEDC_FREQ_HZ,
              RADAR_SWEEP_MIN_DEG, RADAR_SWEEP_MAX_DEG,
              RADAR_ONE_WAY_MS, RADAR_END_REST_MS, RADAR_START_DELAY_MS);
     return ESP_OK;

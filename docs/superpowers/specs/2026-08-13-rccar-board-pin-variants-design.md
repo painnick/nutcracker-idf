@@ -1,7 +1,7 @@
 # rccar 보드별 핀 매핑 설계 문서
 
-날짜: 2026-08-13
-상태: 승인 (구현 대기)
+날짜: 2026-08-13  
+상태: 미구현. 현행 펌웨어는 보드 변형 Kconfig 없이 `components/rccar/rccar_pins.h` 단일 맵을 쓴다. 핀 표는 README 및 `docs/superpowers/specs/2026-07-31-nutcracker-idf-design.md` 3.1절을 따른다.  
 기반: nutcracker-idf v1 (components/rccar)
 
 문서 및 이 프로젝트에 대한 답변은 한글로 작성한다.

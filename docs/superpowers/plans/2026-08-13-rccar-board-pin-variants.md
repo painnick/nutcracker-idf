@@ -1,5 +1,7 @@
 # rccar 보드별 핀 매핑 구현 계획
 
+> **상태:** 미구현. 현행은 `rccar_pins.h` 단일 맵이다. 설계 문서는 미구현으로 표시했다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) 또는 superpowers:executing-plans 로 태스크 단위 실행. 진행 추적은 체크박스(`- [ ]`) 사용.
 
 **Goal:** Kconfig `choice`로 rccar 핀 매핑을 PCB 변형(nutcracker1.0 / kingtiger1.1)별로 전환하고, 기본 빌드를 kingtiger1.1로 만든다.

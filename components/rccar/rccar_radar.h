@@ -1,6 +1,6 @@
 /**
  * @file rccar_radar.h
- * @brief 레이더 서보 (GPIO32, LEDC 50 Hz)
+ * @brief 레이더 서보 (GPIO32, LEDC 50 Hz 14-bit)
  */
 #ifndef RCCAR_RADAR_H
 #define RCCAR_RADAR_H

@@ -1,5 +1,7 @@
 # nutcracker-idf 구현 계획
 
+> **상태:** 초기 v1 실행 기록. 현행 설계/핀/조작은 `docs/superpowers/specs/2026-07-31-nutcracker-idf-design.md` 와 `README.md` 를 따른다. 이 계획의 595 체인, 연속 회전 서보, 구 핀 표는 채택하지 않았다.
+
 > **에이전트용:** 구현 시 REQUIRED SUB-SKILL: `superpowers:subagent-driven-development`(권장) 또는 `superpowers:executing-plans`로 태스크 단위 실행. 진행 추적은 체크박스(`- [ ]`) 사용.
 
 **Goal:** panzer4-idf 기반으로 ESP32 + Bluepad32 메카넘 RC 카 펌웨어 v1을 빌드 가능한 상태로 만든다.
