@@ -98,6 +98,7 @@ static const char *DRIVE_LOG_TAG = "drive_dbg";
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
     uni_balance_board_state_t bb_state;
+    bool ready;
 } my_platform_instance_t;
 
 typedef struct {
@@ -130,6 +131,16 @@ static esp_timer_handle_t humidifier_pulse_timer = NULL;
 static esp_timer_handle_t laser_rumble_timer = NULL;
 /* Core0 disconnect/ready ↔ Core1 input_process_task. false until device ready. */
 static volatile bool s_connected = false;
+static volatile bool s_bb_ready = false;
+static volatile bool s_gp_ready = false;
+static volatile int s_ready_count = 0;
+static uni_hid_device_t *volatile s_bb_device = NULL;
+static uni_hid_device_t *volatile s_gp_device = NULL;
+static volatile int32_t s_bb_axis_y = 0;
+static volatile int32_t s_bb_axis_rx = 0;
+static volatile int64_t s_bb_last_ms = 0;
+static input_event_t s_last_gp_evt;
+static volatile int64_t s_gp_last_ms = 0;
 
 /* play_dual_rumble()은 btstack 타이머 리스트를 조작하는데 그 리스트에는 락이 없다.
    Core1에서 직접 부르면 Core0 런루프의 타이머 순회와 경쟁해 리스트가 깨진다.
@@ -168,6 +179,14 @@ static bool device_is_switch_gamepad(uni_hid_device_t *d) {
         default:
             return false;
     }
+}
+
+static bool device_is_balance_board(uni_hid_device_t *d) {
+    if (d == NULL)
+        return false;
+    if (d->controller_subtype == CONTROLLER_SUBTYPE_WII_BALANCE_BOARD)
+        return true;
+    return d->controller.klass == UNI_CONTROLLER_CLASS_BALANCE_BOARD;
 }
 
 static bool device_wants_connect_rumble(uni_hid_device_t *d) {
@@ -297,8 +316,34 @@ static void connect_sound_cb(void *arg) {
    _safe 변형을 쓴다 (_unsafe는 btstack 스레드 전용). */
 static void scan_restart_cb(void *arg) {
     (void)arg;
+    if (s_ready_count >= CONFIG_BLUEPAD32_MAX_DEVICES)
+        return;
     logi("custom: restarting scan\n");
     uni_bt_start_scanning_and_autoconnect_safe();
+}
+
+static void maybe_schedule_scan(void) {
+    if (s_ready_count >= CONFIG_BLUEPAD32_MAX_DEVICES)
+        return;
+    esp_timer_stop(scan_restart_timer);
+    esp_timer_start_once(scan_restart_timer, SCAN_RESTART_DELAY_MS * 1000);
+}
+
+static void forget_ready_device(uni_hid_device_t *d) {
+    if (d == s_bb_device) {
+        s_bb_device = NULL;
+        s_bb_ready = false;
+        s_bb_axis_y = 0;
+        s_bb_axis_rx = 0;
+        s_bb_last_ms = 0;
+    }
+    if (d == s_gp_device) {
+        s_gp_device = NULL;
+        s_gp_ready = false;
+        s_gamepad_prev_buttons = 0;
+        s_gp_last_ms = 0;
+        memset(&s_last_gp_evt, 0, sizeof(s_last_gp_evt));
+    }
 }
 
 static void gamepad_effect_on_btstack_thread(void *context) {
@@ -339,6 +384,8 @@ static void gamepad_keepalive_cb(void *arg) {
 }
 
 static void gamepad_keepalive_start(uni_hid_device_t *d) {
+    if (device_is_balance_board(d))
+        return;
     if (device_uses_parser_keepalive(d) || !device_supports_bredr_hid_output(d))
         return;
     keepalive_device = d;
@@ -424,6 +471,8 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
         *out_y = clamp_axis((cog_y * AXIS_MAX) / BB_COG_SCALE_RANGE);
 }
 
+static void log_drive_mix(int32_t vx, int32_t vy, int32_t w, const rccar_wheel_speeds_t *wheels);
+
 static void maybe_idle_exhaust(bool moving, int64_t now_ms)
 {
     rccar_radar_set_moving(moving);
@@ -431,6 +480,20 @@ static void maybe_idle_exhaust(bool moving, int64_t now_ms)
                                  moving, now_ms, IDLE_EXHAUST_STOP_MS)) {
         rccar_humidifier_pulse_on_ms(IDLE_EXHAUST_PULSE_ON_MS);
     }
+}
+
+static void apply_balance_board_drive(int32_t axis_y, int32_t axis_rx, int64_t now_ms)
+{
+    int32_t vx = STICK_VX_SIGN * clamp_axis(axis_y);
+    int32_t vy = STICK_VY_SIGN * clamp_axis(axis_rx);
+    rccar_drive_snap_diagonal_wide(&vx, &vy, AXIS_DEADZONE);
+
+    rccar_wheel_speeds_t wheels;
+    rccar_drive_mix(vx, vy, 0, &wheels);
+    log_drive_mix(vx, vy, 0, &wheels);
+    rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+    maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
+                       wheels.rl != 0 || wheels.rr != 0, now_ms);
 }
 
 static void failsafe_stop(void) {
@@ -547,13 +610,23 @@ static void input_process_task(void *arg) {
 
         failsafe_active = false;
 
-        if (evt_has_control_activity(&evt)) {
+        if (evt_has_control_activity(&evt) ||
+            (s_gp_ready && evt_has_control_activity(&s_last_gp_evt))) {
             connected_idle_bgm_reset();
         }
 
-        /* L1 + R1 hold: 개별 휠 테스트 (차량을 들어 올린 상태에서 사용) */
-        uint8_t l1 = (evt.buttons & BUTTON_SHOULDER_L) ? 1 : 0;
-        uint8_t r1 = (evt.buttons & BUTTON_SHOULDER_R) ? 1 : 0;
+        /* 보드와 패드가 같이 있으면 버튼/포탑은 마지막 패드 리포트를 쓴다.
+           큐 길이 1이라 보드 리포트가 패드를 덮어써도 홀드/에지가 풀리지 않는다. */
+        input_event_t pad;
+        bool pad_live = s_gp_ready && s_gp_last_ms != 0 &&
+                        (now_ms - s_gp_last_ms) <= FAILSAFE_MS;
+        if (pad_live)
+            pad = s_last_gp_evt;
+        else
+            pad = evt;
+
+        uint8_t l1 = (pad.buttons & BUTTON_SHOULDER_L) ? 1 : 0;
+        uint8_t r1 = (pad.buttons & BUTTON_SHOULDER_R) ? 1 : 0;
         if (l1 && r1) {
             if (wheel_test_pressed_at == 0) {
                 wheel_test_pressed_at = now_ms;
@@ -563,7 +636,7 @@ static void input_process_task(void *arg) {
                 now_ms - wheel_test_pressed_at >= WHEEL_TEST_HOLD_MS) {
                 wheel_test_fired = true;
                 rccar_motor_wheel_test_start();
-                request_rumble(evt.device, 300, 200, 200);
+                request_rumble(pad.device, 300, 200, 200);
             }
         } else {
             wheel_test_pressed_at = 0;
@@ -572,19 +645,16 @@ static void input_process_task(void *arg) {
 
         if (rccar_motor_wheel_test_is_running()) {
             rccar_radar_set_moving(true);
-        } else if (evt.balance_board) {
-            int32_t vx = STICK_VX_SIGN * clamp_axis(evt.axis_y);
-            int32_t vy = STICK_VY_SIGN * clamp_axis(evt.axis_rx);
-            rccar_drive_snap_diagonal_wide(&vx, &vy, AXIS_DEADZONE);
-
-            rccar_wheel_speeds_t wheels;
-            rccar_drive_mix(vx, vy, 0, &wheels);
-            log_drive_mix(vx, vy, 0, &wheels);
-            rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
-            maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
-                               wheels.rl != 0 || wheels.rr != 0, now_ms);
-            rccar_motor_turret_set(0);
-        } else {
+        } else if (s_bb_ready) {
+            /* 패드 스틱이 들어와도 주행은 보드 스냅샷만 사용한다.
+               보드 리포트가 끊기면 스틱으로 대체하지 않고 휠만 멈춘다. */
+            if (s_bb_last_ms == 0 || (now_ms - s_bb_last_ms) > FAILSAFE_MS) {
+                rccar_motor_wheel_set(0, 0, 0, 0);
+                maybe_idle_exhaust(false, now_ms);
+            } else {
+                apply_balance_board_drive(s_bb_axis_y, s_bb_axis_rx, now_ms);
+            }
+        } else if (!evt.balance_board) {
         int32_t ax = clamp_axis(evt.axis_x);
         int32_t ay = clamp_axis(evt.axis_y);
         int32_t arx = clamp_axis(evt.axis_rx);
@@ -607,17 +677,26 @@ static void input_process_task(void *arg) {
         rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
         maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
                            wheels.rl != 0 || wheels.rr != 0, now_ms);
+        } else {
+            rccar_motor_wheel_set(0, 0, 0, 0);
+            maybe_idle_exhaust(false, now_ms);
+        }
 
-        int32_t turret = 0;
-        if (evt.dpad & DPAD_LEFT)
-            turret = -TURRET_SPEED;
-        if (evt.dpad & DPAD_RIGHT)
-            turret = TURRET_SPEED;
-        rccar_motor_turret_set(turret);
-        } /* !wheel_test */
+        if (!rccar_motor_wheel_test_is_running()) {
+            if (pad_live || !evt.balance_board) {
+                int32_t turret = 0;
+                if (pad.dpad & DPAD_LEFT)
+                    turret = -TURRET_SPEED;
+                if (pad.dpad & DPAD_RIGHT)
+                    turret = TURRET_SPEED;
+                rccar_motor_turret_set(turret);
+            } else {
+                rccar_motor_turret_set(0);
+            }
+        }
 
         /* Y edge: 레이더 서보 ON/OFF 토글 (기본 OFF) */
-        if ((evt.buttons & BUTTON_Y) && !(prev_buttons & BUTTON_Y)) {
+        if ((pad.buttons & BUTTON_Y) && !(prev_buttons & BUTTON_Y)) {
             if (now_ms - last_y_ms >= RADAR_DEBOUNCE_MS) {
                 last_y_ms = now_ms;
                 rccar_radar_toggle();
@@ -625,17 +704,17 @@ static void input_process_task(void *arg) {
         }
 
         /* A edge: 개틀링 발사 (효과음 + LED 점멸) */
-        if ((evt.buttons & BUTTON_A) && !(prev_buttons & BUTTON_A)) {
+        if ((pad.buttons & BUTTON_A) && !(prev_buttons & BUTTON_A)) {
             if (now_ms - last_a_ms >= GATLING_DEBOUNCE_MS) {
                 last_a_ms = now_ms;
-                handle_a_button_gatling(evt.device);
+                handle_a_button_gatling(pad.device);
             }
         }
 
         /* Select edge: 헤드라이트 토글. Start와 같이 누르면 공장초기화용이므로 무시 */
-        if ((evt.misc_buttons & MISC_BUTTON_SELECT) &&
+        if ((pad.misc_buttons & MISC_BUTTON_SELECT) &&
             !(prev_misc_buttons & MISC_BUTTON_SELECT) &&
-            !(evt.misc_buttons & MISC_BUTTON_START)) {
+            !(pad.misc_buttons & MISC_BUTTON_START)) {
             if (now_ms - last_select_ms >= HEADLIGHT_DEBOUNCE_MS) {
                 last_select_ms = now_ms;
                 rccar_headlight_toggle();
@@ -643,16 +722,16 @@ static void input_process_task(void *arg) {
         }
 
         /* B edge: 레이저 발사 (효과음 + LED, 후좌 없음) */
-        if ((evt.buttons & BUTTON_B) && !(prev_buttons & BUTTON_B)) {
+        if ((pad.buttons & BUTTON_B) && !(prev_buttons & BUTTON_B)) {
             if (now_ms - last_b_ms >= LASER_DEBOUNCE_MS) {
                 last_b_ms = now_ms;
-                handle_b_button_fire(evt.device);
+                handle_b_button_fire(pad.device);
             }
         }
 
         /* L1 / R1: volume - / + (동시 누름은 휠 테스트용) */
         if (!(l1 && r1)) {
-        if (evt.buttons & BUTTON_SHOULDER_L) {
+        if (pad.buttons & BUTTON_SHOULDER_L) {
             if (now_ms - last_l1_ms >= DEBOUNCE_MS) {
                 last_l1_ms = now_ms;
                 uint8_t v = rccar_storage_volume_get();
@@ -664,7 +743,7 @@ static void input_process_task(void *arg) {
             }
         }
 
-        if (evt.buttons & BUTTON_SHOULDER_R) {
+        if (pad.buttons & BUTTON_SHOULDER_R) {
             if (now_ms - last_r1_ms >= DEBOUNCE_MS) {
                 last_r1_ms = now_ms;
                 uint8_t v = rccar_storage_volume_get();
@@ -678,14 +757,14 @@ static void input_process_task(void *arg) {
         }
 
         /* Select + Start hold: factory reset (NVS erase + reboot) */
-        uint8_t sel = (evt.misc_buttons & MISC_BUTTON_SELECT) ? 1 : 0;
-        uint8_t sta = (evt.misc_buttons & MISC_BUTTON_START) ? 1 : 0;
+        uint8_t sel = (pad.misc_buttons & MISC_BUTTON_SELECT) ? 1 : 0;
+        uint8_t sta = (pad.misc_buttons & MISC_BUTTON_START) ? 1 : 0;
         if (sel && sta) {
             if (select_start_pressed_at == 0)
                 select_start_pressed_at = now_ms;
             if (!select_start_fired && now_ms - select_start_pressed_at >= SELECT_START_HOLD_MS) {
                 select_start_fired = true;
-                request_rumble(evt.device, 800, 255, 255);
+                request_rumble(pad.device, 800, 255, 255);
                 esp_timer_stop(restart_timer);
                 esp_timer_start_once(restart_timer, 800 * 1000);
             }
@@ -694,8 +773,8 @@ static void input_process_task(void *arg) {
             select_start_fired = false;
         }
 
-        prev_buttons = evt.buttons;
-        prev_misc_buttons = evt.misc_buttons;
+        prev_buttons = pad.buttons;
+        prev_misc_buttons = pad.misc_buttons;
     }
 }
 
@@ -845,6 +924,8 @@ static void my_platform_on_device_connected(uni_hid_device_t *d) {
         logi("custom: ignoring virtual device\n");
         return;
     }
+    my_platform_instance_t *ins = get_my_platform_instance(d);
+    ins->ready = false;
     /* inquiry(주기적 스캔)는 BR/EDR 대역을 크게 점유한다. 연결 직후 HID 셋업과
        첫 출력 리포트가 오가는 구간에 겹치면 링크가 굶어 컨트롤러가 끊는다.
        Bluepad32는 장치가 다 차도 스캔을 자동으로 끄지 않으므로 여기서 끈다.
@@ -867,12 +948,39 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
         logi("custom: ignoring virtual device\n");
         return;
     }
+
+    my_platform_instance_t *ins = get_my_platform_instance(d);
+    bool was_ready = ins->ready;
+    bool was_bb = (d == s_bb_device);
+    bool was_gp = (d == s_gp_device);
+    if (was_ready) {
+        ins->ready = false;
+        if (s_ready_count > 0)
+            s_ready_count--;
+    }
+    forget_ready_device(d);
+
+    if (d == gamepad_effect_device) {
+        gamepad_effect_device = NULL;
+        esp_timer_stop(gamepad_effect_timer);
+    }
+    if (d == keepalive_device)
+        gamepad_keepalive_stop();
+
+    /* 다른 장치가 남아 있으면 전체 페일세이프를 하지 않는다. */
+    if (s_ready_count > 0) {
+        s_connected = true;
+        if (was_bb)
+            rccar_motor_wheel_set(0, 0, 0, 0);
+        if (was_gp)
+            rccar_motor_turret_set(0);
+        maybe_schedule_scan();
+        return;
+    }
+
     /* Drop connection first so Core1 stops applying any late samples */
     s_connected = false;
-    gamepad_effect_device = NULL;
     s_gamepad_prev_buttons = 0;
-    esp_timer_stop(gamepad_effect_timer);
-    gamepad_keepalive_stop();
     esp_timer_stop(humidifier_pulse_timer);
     esp_timer_stop(laser_rumble_timer);
     laser_rumble_device = NULL;
@@ -905,30 +1013,50 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     ins->gamepad_seat = GAMEPAD_SEAT_A;
     memset(&ins->bb_state, 0, sizeof(ins->bb_state));
 
-    if (d->controller_subtype == CONTROLLER_SUBTYPE_WII_BALANCE_BOARD)
+    bool first = (s_ready_count == 0);
+    bool is_bb = device_is_balance_board(d);
+    if (is_bb) {
+        s_bb_device = d;
+        s_bb_ready = true;
+        s_bb_axis_y = 0;
+        s_bb_axis_rx = 0;
+        s_bb_last_ms = 0;
         logi("custom: Wii Balance Board ready\n");
-
-    /* Ensure motors stopped before accepting input */
-    rccar_motor_all_stop();
-    if (input_queue != NULL)
-        xQueueReset(input_queue);
-
-    esp_timer_stop(waiting_idle_timer);
-    esp_timer_stop(connect_sound_timer);
-    if (connect_sound_play_timer != NULL) {
-        esp_timer_stop(connect_sound_play_timer);
+    } else {
+        s_gp_device = d;
+        s_gp_ready = true;
     }
-    esp_timer_start_once(connect_sound_timer, 100 * 1000);
+    ins->ready = true;
+    s_ready_count++;
+
+    if (first) {
+        /* Ensure motors stopped before accepting input */
+        rccar_motor_all_stop();
+        if (input_queue != NULL)
+            xQueueReset(input_queue);
+
+        esp_timer_stop(waiting_idle_timer);
+        esp_timer_stop(connect_sound_timer);
+        if (connect_sound_play_timer != NULL) {
+            esp_timer_stop(connect_sound_play_timer);
+        }
+        esp_timer_start_once(connect_sound_timer, 100 * 1000);
+    }
 
     /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. DS4는 calibration/fw
-       feature report 교환 중 출력 리포트를 받으면 링크를 끊을 수 있으므로 지연한다. */
-    gamepad_effect_device = d;
-    esp_timer_stop(gamepad_effect_timer);
-    esp_timer_start_once(gamepad_effect_timer, GAMEPAD_EFFECT_DELAY_MS * 1000);
-    gamepad_keepalive_start(d);
+       feature report 교환 중 출력 리포트를 받으면 링크를 끊을 수 있으므로 지연한다.
+       보드가 두 번째로 붙을 때는 패드의 keep-alive를 덮어쓰지 않는다. */
+    if (!is_bb || first) {
+        gamepad_effect_device = d;
+        esp_timer_stop(gamepad_effect_timer);
+        esp_timer_start_once(gamepad_effect_timer, GAMEPAD_EFFECT_DELAY_MS * 1000);
+    }
+    if (!is_bb)
+        gamepad_keepalive_start(d);
 
     s_connected = true;
     connected_idle_bgm_reset();
+    maybe_schedule_scan();
     return UNI_ERROR_SUCCESS;
 }
 
@@ -955,6 +1083,8 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
             evt.dpad = ctl->gamepad.dpad;
             evt.buttons = buttons;
             evt.misc_buttons = ctl->gamepad.misc_buttons;
+            s_last_gp_evt = evt;
+            s_gp_last_ms = evt.timestamp_ms;
             break;
         }
         case UNI_CONTROLLER_CLASS_BALANCE_BOARD: {
@@ -967,6 +1097,9 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
             evt.axis_rx = bb_x;
             evt.axis_ry = 0;
             evt.balance_board = true;
+            s_bb_axis_y = bb_y;
+            s_bb_axis_rx = bb_x;
+            s_bb_last_ms = evt.timestamp_ms;
             break;
         }
         default:
