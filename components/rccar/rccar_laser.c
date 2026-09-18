@@ -91,6 +91,12 @@ esp_err_t rccar_laser_init(void)
 #endif
         .intr_type = GPIO_INTR_DISABLE,
     };
+    /* 출력으로 바꾸기 전에 OFF 레벨을 래치한다. 리셋 후 0이면 활성-Low가 순간 ON이 된다. */
+#if RCCAR_LASER_ACTIVE_LOW
+    gpio_set_level(RCCAR_PIN_LASER, 1);
+#else
+    gpio_set_level(RCCAR_PIN_LASER, 0);
+#endif
     esp_err_t ret = gpio_config(&io);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "gpio_config laser %s", esp_err_to_name(ret));
@@ -104,6 +110,7 @@ esp_err_t rccar_laser_init(void)
         .pull_down_en = GPIO_PULLDOWN_ENABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
+    gpio_set_level(RCCAR_PIN_GATLING, 0);
     ret = gpio_config(&gatling_io);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "gpio_config gatling %s", esp_err_to_name(ret));

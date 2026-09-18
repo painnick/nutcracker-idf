@@ -40,6 +40,11 @@ esp_err_t rccar_headlight_init(void)
 #endif
         .intr_type = GPIO_INTR_DISABLE,
     };
+#if RCCAR_HEADLIGHT_ACTIVE_LOW
+    gpio_set_level(RCCAR_PIN_HEADLIGHT, 1);
+#else
+    gpio_set_level(RCCAR_PIN_HEADLIGHT, 0);
+#endif
     esp_err_t ret = gpio_config(&io);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "gpio_config headlight %s", esp_err_to_name(ret));

@@ -43,11 +43,11 @@ static esp_err_t flush_pixels(const uint8_t *pixels, size_t len)
     rmt_transmit_config_t tx_config = {
         .loop_count = 0,
     };
-    esp_err_t ret = rmt_transmit(s_rmt, s_encoder, pixels, len, &tx_config);
-    if (ret != ESP_OK) {
-        return ret;
+    /* 이전 전송이 남았으면 이번 프레임을 건너뛴다. 타이머 태스크를 막지 않는다. */
+    if (rmt_tx_wait_all_done(s_rmt, 0) != ESP_OK) {
+        return ESP_ERR_TIMEOUT;
     }
-    return rmt_tx_wait_all_done(s_rmt, pdMS_TO_TICKS(20));
+    return rmt_transmit(s_rmt, s_encoder, pixels, len, &tx_config);
 }
 
 static uint8_t engine_bright(void)
@@ -119,7 +119,7 @@ static void blackout_locked(void)
 {
     memset(s_pixels, 0, sizeof(s_pixels));
     esp_err_t ret = flush_pixels(s_pixels, sizeof(s_pixels));
-    if (ret != ESP_OK) {
+    if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
         ESP_LOGW(TAG, "blackout %s", esp_err_to_name(ret));
     }
 }
@@ -153,16 +153,16 @@ static void anim_timer_cb(void *arg)
         return;
     }
 
-    if (s_mist) {
+        if (s_mist) {
         render_mist_frame();
         esp_err_t ret = flush_pixels(s_pixels, sizeof(s_pixels));
-        if (ret != ESP_OK) {
+        if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
             ESP_LOGW(TAG, "flush %s", esp_err_to_name(ret));
         }
     } else if (s_engine_wanted) {
         render_engine_frame();
         esp_err_t ret = flush_pixels(s_pixels, sizeof(s_pixels));
-        if (ret != ESP_OK) {
+        if (ret != ESP_OK && ret != ESP_ERR_TIMEOUT) {
             ESP_LOGW(TAG, "flush %s", esp_err_to_name(ret));
         }
     }

@@ -22,7 +22,7 @@ esp_err_t rccar_motor_init(void);
 /**
  * @brief 4휠 속도 즉시 설정 (램프 없음)
  * @param fl,fr,rl,rr -512 .. 511 (양수: IN1 PWM, 음수: IN2 PWM)
- * @note 0이 아닌 값은 최소 듀티(448) 이상으로 올려서 적용한다.
+ * @note 0이 아닌 값은 정지 마찰을 이기도록 최소 듀티(448, 약 87.5%) 이상으로 올린다.
  */
 void rccar_motor_wheel_set(int fl, int fr, int rl, int rr);
 
@@ -42,6 +42,9 @@ void rccar_motor_all_stop(void);
  * @note 이미 실행 중이면 무시한다.
  */
 void rccar_motor_wheel_test_start(void);
+
+/** @brief 개별 휠 테스트를 취소하고 모터를 정지한다 */
+void rccar_motor_wheel_test_stop(void);
 
 /** @brief 개별 휠 테스트 실행 중 여부 */
 bool rccar_motor_wheel_test_is_running(void);

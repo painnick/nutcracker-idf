@@ -13,10 +13,10 @@ extern "C" {
 #endif
 
 typedef struct {
-    int32_t fl, fr, rl, rr; /* -512 .. 511 */
+    int32_t fl, fr, rl, rr; /* -512 .. 512 */
 } rccar_wheel_speeds_t;
 
-/** vx,vy,w: 데드존 적용 후 값, 범위 -512..511 */
+/** vx,vy,w: 데드존 적용 후 값, 범위 -512..512 */
 void rccar_drive_mix(int32_t vx, int32_t vy, int32_t w, rccar_wheel_speeds_t *out);
 
 /** abs가 deadzone 이하면 0, 아니면 그대로 (부호 유지) */

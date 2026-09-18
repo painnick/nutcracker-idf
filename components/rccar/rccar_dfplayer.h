@@ -29,6 +29,26 @@ esp_err_t rccar_dfplayer_play(uint8_t track);
 /** 트랙 반복 재생 */
 esp_err_t rccar_dfplayer_play_loop(uint8_t track);
 
+/**
+ * TX 전용이라 트랙 종료(0x3D)를 받지 못한다.
+ * 짧은 효과음만 이 시간(ms) 뒤에 IDLE 루프로 돌아간다. 0이면 재개하지 않는다.
+ */
+static inline uint32_t rccar_dfplayer_resume_idle_ms(uint8_t track)
+{
+    switch (track) {
+    case RCCAR_DFPLAYER_TRACK_GUN:
+        return 2500;
+    case RCCAR_DFPLAYER_TRACK_MG:
+        return 1500;
+    case RCCAR_DFPLAYER_TRACK_CONNECT:
+        return 4000;
+    case RCCAR_DFPLAYER_TRACK_NITRO:
+        return 3000;
+    default:
+        return 0;
+    }
+}
+
 /** 볼륨 설정 (0~30) */
 esp_err_t rccar_dfplayer_set_volume(uint8_t vol);
 

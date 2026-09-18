@@ -120,6 +120,7 @@ static esp_timer_handle_t restart_timer = NULL;
 static esp_timer_handle_t waiting_idle_timer = NULL;
 static esp_timer_handle_t connected_idle_bgm_timer = NULL;
 static esp_timer_handle_t connect_sound_timer = NULL;
+static esp_timer_handle_t connect_sound_play_timer = NULL;
 static esp_timer_handle_t gamepad_effect_timer = NULL;
 static esp_timer_handle_t gamepad_keepalive_timer = NULL;
 static esp_timer_handle_t scan_restart_timer = NULL;
@@ -228,7 +229,7 @@ static void rumble_on_btstack_thread(void *context) {
 
 static void waiting_idle_cb(void *arg) {
     (void)arg;
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
+    rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
 }
 
 static void connected_idle_bgm_reset(void)
@@ -275,12 +276,19 @@ static bool evt_has_control_activity(const input_event_t *evt)
 
 /* 연결 효과음. btstack 스레드(on_device_ready)에서 UART를 쓰면 링크가 끊길 수 있어
    esp_timer 태스크에서 stop/play 한다. stop 직후 바로 play하면 DFPlayer가 무시하므로
-   그 사이에 vTaskDelay를 둔다. */
+   100ms one-shot으로 나눈다. vTaskDelay는 ESP_TIMER_TASK를 막는다. */
+static void connect_sound_play_cb(void *arg) {
+    (void)arg;
+    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
+}
+
 static void connect_sound_cb(void *arg) {
     (void)arg;
     rccar_dfplayer_stop();
-    vTaskDelay(pdMS_TO_TICKS(100));
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_CONNECT);
+    if (connect_sound_play_timer != NULL) {
+        esp_timer_stop(connect_sound_play_timer);
+        esp_timer_start_once(connect_sound_play_timer, 100 * 1000);
+    }
 }
 
 /* 유예 후 스캔 재개. esp_timer 태스크에서 실행되므로 btstack 스레드에 위임하는
@@ -418,7 +426,10 @@ static void maybe_idle_exhaust(bool moving, int64_t now_ms)
 
 static void failsafe_stop(void) {
     maybe_idle_exhaust(false, esp_timer_get_time() / 1000);
+    rccar_motor_wheel_test_stop();
     rccar_motor_all_stop();
+    rccar_radar_set_enabled(false);
+    rccar_humidifier_set(false);
     rccar_neopixel_set_enabled(false);
     rccar_laser_stop();
 }
@@ -492,7 +503,6 @@ static void input_process_task(void *arg) {
             select_start_fired = false;
             wheel_test_pressed_at = 0;
             wheel_test_fired = false;
-            rccar_radar_set_enabled(false);
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -504,7 +514,7 @@ static void input_process_task(void *arg) {
             last_input_ms = evt.timestamp_ms;
         }
 
-        /* No report for FAILSAFE_MS: stop drive/turret */
+        /* No report for FAILSAFE_MS: 모터, 휠 테스트, 레이더, 가습기, 레이저 정지 */
         if (last_input_ms == 0 || (now_ms - last_input_ms) > FAILSAFE_MS) {
             if (!failsafe_active) {
                 failsafe_stop();
@@ -519,7 +529,6 @@ static void input_process_task(void *arg) {
         /* Re-check after receive: disconnect may race with queue read */
         if (!s_connected) {
             last_input_ms = 0;
-            rccar_radar_set_enabled(false);
             if (!failsafe_active) {
                 failsafe_stop();
                 failsafe_active = true;
@@ -727,6 +736,14 @@ static void my_platform_init(int argc, const char **argv) {
     };
     esp_timer_create(&connect_sound_args, &connect_sound_timer);
 
+    const esp_timer_create_args_t connect_sound_play_args = {
+        .callback = &connect_sound_play_cb,
+        .arg = NULL,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "connect_sound_play",
+    };
+    esp_timer_create(&connect_sound_play_args, &connect_sound_play_timer);
+
     const esp_timer_create_args_t gamepad_effect_args = {
         .callback = &gamepad_effect_cb,
         .arg = NULL,
@@ -785,7 +802,7 @@ static void my_platform_on_init_complete(void) {
     rccar_dfplayer_set_volume(vol);
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
+    rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 }
 
@@ -838,12 +855,15 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     esp_timer_stop(humidifier_pulse_timer);
     esp_timer_stop(laser_rumble_timer);
     laser_rumble_device = NULL;
+    esp_timer_stop(connect_sound_timer);
+    if (connect_sound_play_timer != NULL) {
+        esp_timer_stop(connect_sound_play_timer);
+    }
     failsafe_stop();
-    rccar_radar_set_enabled(false);
     if (input_queue != NULL)
         xQueueReset(input_queue);
     connected_idle_bgm_reset();
-    rccar_dfplayer_play(RCCAR_DFPLAYER_TRACK_IDLE);
+    rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 
     /* 스캔은 바로 켜지 않는다. 컨트롤러가 스스로 재연결하는 구간에 inquiry가
@@ -874,6 +894,9 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
 
     esp_timer_stop(waiting_idle_timer);
     esp_timer_stop(connect_sound_timer);
+    if (connect_sound_play_timer != NULL) {
+        esp_timer_stop(connect_sound_play_timer);
+    }
     esp_timer_start_once(connect_sound_timer, 100 * 1000);
 
     /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. DS4는 calibration/fw

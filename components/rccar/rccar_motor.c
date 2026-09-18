@@ -71,6 +71,7 @@ static bool s_inited = false;
 
 static TaskHandle_t s_wheel_test_task = NULL;
 static volatile bool s_wheel_test_active = false;
+static volatile bool s_wheel_test_cancel = false;
 
 static const int WHEEL_TEST_GPIO[WHEEL_COUNT][2] = {
     { RCCAR_PIN_FL_IN1, RCCAR_PIN_FL_IN2 },
@@ -79,26 +80,42 @@ static const int WHEEL_TEST_GPIO[WHEEL_COUNT][2] = {
     { RCCAR_PIN_RR_IN1, RCCAR_PIN_RR_IN2 },
 };
 
-static void set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_b, int32_t speed)
+static esp_err_t set_motor_duty(mcpwm_cmpr_handle_t cmpr_a, mcpwm_cmpr_handle_t cmpr_b, int32_t speed)
 {
-    uint32_t ticks;
+    uint32_t ticks_a = 0;
+    uint32_t ticks_b = 0;
     if (speed > 0) {
-        ticks = ((uint32_t)speed * MCPWM_PERIOD_TICKS) / AXIS_MAX;
-        if (ticks > MCPWM_PERIOD_TICKS) {
-            ticks = MCPWM_PERIOD_TICKS;
+        ticks_a = ((uint32_t)speed * MCPWM_PERIOD_TICKS) / AXIS_MAX;
+        if (ticks_a > MCPWM_PERIOD_TICKS) {
+            ticks_a = MCPWM_PERIOD_TICKS;
         }
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_a, ticks));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_b, 0));
     } else if (speed < 0) {
-        ticks = ((uint32_t)(-speed) * MCPWM_PERIOD_TICKS) / AXIS_MAX;
-        if (ticks > MCPWM_PERIOD_TICKS) {
-            ticks = MCPWM_PERIOD_TICKS;
+        ticks_b = ((uint32_t)(-speed) * MCPWM_PERIOD_TICKS) / AXIS_MAX;
+        if (ticks_b > MCPWM_PERIOD_TICKS) {
+            ticks_b = MCPWM_PERIOD_TICKS;
         }
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_a, 0));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_b, ticks));
-    } else {
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_a, 0));
-        ESP_ERROR_CHECK(mcpwm_comparator_set_compare_value(cmpr_b, 0));
+    }
+
+    esp_err_t ret = mcpwm_comparator_set_compare_value(cmpr_a, ticks_a);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "cmpr_a set %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = mcpwm_comparator_set_compare_value(cmpr_b, ticks_b);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "cmpr_b set %s", esp_err_to_name(ret));
+        return ret;
+    }
+    return ESP_OK;
+}
+
+static void motors_coast_unlocked(void)
+{
+    for (int i = 0; i < MOTOR_COUNT; i++) {
+        if (s_motors[i].cmpr_a && s_motors[i].cmpr_b) {
+            (void)mcpwm_comparator_set_compare_value(s_motors[i].cmpr_a, 0);
+            (void)mcpwm_comparator_set_compare_value(s_motors[i].cmpr_b, 0);
+        }
     }
 }
 
@@ -297,10 +314,11 @@ static void log_wheel_set(int fl, int fr, int rl, int rr)
     last_rr = rr;
     last_log_ms = now_ms;
 
-    ESP_LOGI(TAG, "wheel cmd FL=%d FR=%d RL=%d RR=%d | applied FR=%d RR=%d",
-             fl, fr, rl, rr, applied[WHEEL_FR], applied[WHEEL_RR]);
+    ESP_LOGI(TAG, "wheel cmd FL=%d FR=%d RL=%d RR=%d | applied FL=%d FR=%d RL=%d RR=%d",
+             fl, fr, rl, rr,
+             applied[WHEEL_FL], applied[WHEEL_FR], applied[WHEEL_RL], applied[WHEEL_RR]);
 
-    for (int i = WHEEL_FR; i <= WHEEL_RR; i++) {
+    for (int i = WHEEL_FL; i <= WHEEL_RR; i++) {
         if (!s_motors[i].cmpr_a || !s_motors[i].cmpr_b) {
             ESP_LOGW(TAG, "%s cmpr missing (a=%p b=%p)",
                      WHEEL_NAME[i],
@@ -317,10 +335,19 @@ void rccar_motor_wheel_set(int fl, int fr, int rl, int rr)
     }
     if (xSemaphoreTake(s_motor_mutex, portMAX_DELAY) == pdTRUE) {
         const int vals[WHEEL_COUNT] = { fl, fr, rl, rr };
+        bool failed = false;
         for (int i = 0; i < WHEEL_COUNT; i++) {
             if (s_motors[i].cmpr_a && s_motors[i].cmpr_b) {
-                set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b, apply_min_speed(vals[i]));
+                if (set_motor_duty(s_motors[i].cmpr_a, s_motors[i].cmpr_b,
+                                   apply_min_speed(vals[i])) != ESP_OK) {
+                    failed = true;
+                    break;
+                }
             }
+        }
+        if (failed) {
+            ESP_LOGE(TAG, "wheel set failed, coast");
+            motors_coast_unlocked();
         }
         log_wheel_set(fl, fr, rl, rr);
         xSemaphoreGive(s_motor_mutex);
@@ -333,7 +360,11 @@ void rccar_motor_turret_set(int speed)
         return;
     }
     if (s_motors[MOTOR_TURRET].cmpr_a && s_motors[MOTOR_TURRET].cmpr_b) {
-        set_motor_duty(s_motors[MOTOR_TURRET].cmpr_a, s_motors[MOTOR_TURRET].cmpr_b, speed);
+        if (set_motor_duty(s_motors[MOTOR_TURRET].cmpr_a, s_motors[MOTOR_TURRET].cmpr_b, speed) != ESP_OK) {
+            ESP_LOGE(TAG, "turret set failed, coast");
+            (void)mcpwm_comparator_set_compare_value(s_motors[MOTOR_TURRET].cmpr_a, 0);
+            (void)mcpwm_comparator_set_compare_value(s_motors[MOTOR_TURRET].cmpr_b, 0);
+        }
     }
 }
 
@@ -376,6 +407,21 @@ static void wheel_test_spin_one(int wheel_idx, int speed)
     rccar_motor_wheel_set(fl, fr, rl, rr);
 }
 
+static bool wheel_test_wait_or_cancel(int ms)
+{
+    const TickType_t slice = pdMS_TO_TICKS(50);
+    TickType_t left = pdMS_TO_TICKS(ms);
+    while (left > 0) {
+        if (s_wheel_test_cancel) {
+            return true;
+        }
+        TickType_t d = (left < slice) ? left : slice;
+        vTaskDelay(d);
+        left -= d;
+    }
+    return s_wheel_test_cancel;
+}
+
 static void wheel_test_task(void *arg)
 {
     (void)arg;
@@ -383,21 +429,28 @@ static void wheel_test_task(void *arg)
     s_wheel_test_active = true;
     ESP_LOGI(TAG, "wheel test start (FL->FR->RL->RR, %d ms each)", WHEEL_TEST_RUN_MS);
 
-    for (int pass = 0; pass < 2; pass++) {
+    for (int pass = 0; pass < 2 && !s_wheel_test_cancel; pass++) {
         int speed = (pass == 0) ? WHEEL_TEST_SPEED : -WHEEL_TEST_SPEED;
         const char *pass_name = (pass == 0) ? "forward" : "reverse";
 
         ESP_LOGI(TAG, "wheel test pass: %s", pass_name);
         for (int i = 0; i < WHEEL_COUNT; i++) {
+            if (s_wheel_test_cancel) {
+                break;
+            }
             wheel_test_spin_one(i, speed);
-            vTaskDelay(pdMS_TO_TICKS(WHEEL_TEST_RUN_MS));
+            if (wheel_test_wait_or_cancel(WHEEL_TEST_RUN_MS)) {
+                break;
+            }
             rccar_motor_wheel_set(0, 0, 0, 0);
-            vTaskDelay(pdMS_TO_TICKS(WHEEL_TEST_GAP_MS));
+            if (wheel_test_wait_or_cancel(WHEEL_TEST_GAP_MS)) {
+                break;
+            }
         }
     }
 
     rccar_motor_wheel_set(0, 0, 0, 0);
-    ESP_LOGI(TAG, "wheel test done");
+    ESP_LOGI(TAG, "wheel test %s", s_wheel_test_cancel ? "cancelled" : "done");
     s_wheel_test_active = false;
     s_wheel_test_task = NULL;
     vTaskDelete(NULL);
@@ -408,12 +461,19 @@ bool rccar_motor_wheel_test_is_running(void)
     return s_wheel_test_active;
 }
 
+void rccar_motor_wheel_test_stop(void)
+{
+    s_wheel_test_cancel = true;
+    rccar_motor_all_stop();
+}
+
 void rccar_motor_wheel_test_start(void)
 {
     if (!s_inited || s_wheel_test_task != NULL) {
         return;
     }
 
+    s_wheel_test_cancel = false;
     BaseType_t ret = xTaskCreatePinnedToCore(
         wheel_test_task, "wheel_test", WHEEL_TEST_STACK, NULL,
         WHEEL_TEST_PRIO, &s_wheel_test_task, 1);
