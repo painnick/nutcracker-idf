@@ -25,8 +25,14 @@ int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone);
 /**
  * 우 스틱 평행이동용. 두 축이 모두 어느 정도 있고 각도가 대각선이면
  * |vx|=|vy|로 맞춘다. 아니면 축별 데드존만 적용한다.
+ * 기본 콘은 약 20°~70°.
  */
 void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone);
+
+/**
+ * 밸런스 보드용. 콘을 약 15°~75°로 넓혀 대각선 기울기를 더 쉽게 45°로 맞춘다.
+ */
+void rccar_drive_snap_diagonal_wide(int32_t *vx, int32_t *vy, int32_t deadzone);
 
 /**
  * 휠 정지→출발 검출.

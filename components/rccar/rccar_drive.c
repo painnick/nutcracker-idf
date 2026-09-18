@@ -58,15 +58,19 @@ int32_t rccar_drive_apply_deadzone(int32_t v, int32_t deadzone)
 #define DIAG_RATIO_NUM  1000
 #define DIAG_TAN_LO     364
 #define DIAG_TAN_HI     2747
+/* 밸런스 보드: tan(15°)≈0.268, tan(75°)≈3.732 */
+#define DIAG_TAN_LO_WIDE 268
+#define DIAG_TAN_HI_WIDE 3732
 #define DIAG_AXIS_GATE  48
 
-static bool in_diagonal_cone(int32_t ax, int32_t ay)
+static bool in_diagonal_cone(int32_t ax, int32_t ay, int32_t tan_lo, int32_t tan_hi)
 {
-    return (ay * DIAG_RATIO_NUM >= ax * DIAG_TAN_LO) &&
-           (ay * DIAG_RATIO_NUM <= ax * DIAG_TAN_HI);
+    return (ay * DIAG_RATIO_NUM >= ax * tan_lo) &&
+           (ay * DIAG_RATIO_NUM <= ax * tan_hi);
 }
 
-void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone)
+static void snap_diagonal_cone(int32_t *vx, int32_t *vy, int32_t deadzone,
+                               int32_t tan_lo, int32_t tan_hi)
 {
     if (vx == NULL || vy == NULL) {
         return;
@@ -80,7 +84,8 @@ void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone)
         gate = deadzone;
     }
 
-    if (ax >= gate && ay >= gate && mag > deadzone && in_diagonal_cone(ax, ay)) {
+    if (ax >= gate && ay >= gate && mag > deadzone &&
+        in_diagonal_cone(ax, ay, tan_lo, tan_hi)) {
         *vx = (*vx < 0) ? -mag : mag;
         *vy = (*vy < 0) ? -mag : mag;
         return;
@@ -92,6 +97,16 @@ void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone)
     if (ay <= deadzone) {
         *vy = 0;
     }
+}
+
+void rccar_drive_snap_diagonal(int32_t *vx, int32_t *vy, int32_t deadzone)
+{
+    snap_diagonal_cone(vx, vy, deadzone, DIAG_TAN_LO, DIAG_TAN_HI);
+}
+
+void rccar_drive_snap_diagonal_wide(int32_t *vx, int32_t *vy, int32_t deadzone)
+{
+    snap_diagonal_cone(vx, vy, deadzone, DIAG_TAN_LO_WIDE, DIAG_TAN_HI_WIDE);
 }
 
 bool rccar_drive_idle_to_move(bool *was_moving, int64_t *idle_since_ms,

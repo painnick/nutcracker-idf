@@ -132,6 +132,21 @@ int main(void)
         rccar_drive_snap_diagonal(&x, &y, 60);
         expect_eq("small 40/40 x", x, 0);
         expect_eq("small 40/40 y", y, 0);
+
+        x = 400; y = 120;
+        rccar_drive_snap_diagonal(&x, &y, 60);
+        expect_eq("narrow 400/120 x", x, 400);
+        expect_eq("narrow 400/120 y", y, 120);
+
+        x = 400; y = 120;
+        rccar_drive_snap_diagonal_wide(&x, &y, 60);
+        expect_eq("wide 400/120 x", x, 400);
+        expect_eq("wide 400/120 y", y, 400);
+
+        x = 400; y = 50;
+        rccar_drive_snap_diagonal_wide(&x, &y, 60);
+        expect_eq("wide axis 400/50 x", x, 400);
+        expect_eq("wide axis 400/50 y", y, 0);
     }
 
     printf("--- idle_to_move ---\n");

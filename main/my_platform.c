@@ -84,6 +84,7 @@ static const char *DRIVE_LOG_TAG = "drive_dbg";
 #define GAMEPAD_KEEPALIVE_MS 4000
 /* Balance Board: CoG 민감도 (grams). 값을 낮출수록 적은 체중 이동에도 반응한다. */
 #define BB_MOVE_THRESHOLD 800
+#define BB_MOVE_THRESHOLD_DIAG 500
 #define BB_COG_SCALE_RANGE 2200
 #define BB_SMOOTH_NUM 12
 #define BB_SMOOTH_DEN 100
@@ -107,6 +108,7 @@ typedef struct {
     uint16_t dpad;
     uint16_t buttons;
     uint8_t misc_buttons;
+    bool balance_board;
     uni_hid_device_t *device;
     int64_t timestamp_ms;
 } input_event_t;
@@ -406,8 +408,15 @@ static void balance_board_to_stick_axes(const uni_balance_board_t *bb,
     int32_t cog_x = state->smooth_right - state->smooth_left;
     int32_t cog_y = state->smooth_down - state->smooth_top;
 
-    cog_x = bb_apply_move_threshold(cog_x, BB_MOVE_THRESHOLD);
-    cog_y = bb_apply_move_threshold(cog_y, BB_MOVE_THRESHOLD);
+    int32_t acx = (cog_x < 0) ? -cog_x : cog_x;
+    int32_t acy = (cog_y < 0) ? -cog_y : cog_y;
+    int32_t move_thr = BB_MOVE_THRESHOLD;
+    if (acx >= BB_MOVE_THRESHOLD_DIAG && acy >= BB_MOVE_THRESHOLD_DIAG) {
+        move_thr = BB_MOVE_THRESHOLD_DIAG;
+    }
+
+    cog_x = bb_apply_move_threshold(cog_x, move_thr);
+    cog_y = bb_apply_move_threshold(cog_y, move_thr);
 
     if (cog_x != 0)
         *out_x = clamp_axis((cog_x * AXIS_MAX) / BB_COG_SCALE_RANGE);
@@ -563,6 +572,18 @@ static void input_process_task(void *arg) {
 
         if (rccar_motor_wheel_test_is_running()) {
             rccar_radar_set_moving(true);
+        } else if (evt.balance_board) {
+            int32_t vx = STICK_VX_SIGN * clamp_axis(evt.axis_y);
+            int32_t vy = STICK_VY_SIGN * clamp_axis(evt.axis_rx);
+            rccar_drive_snap_diagonal_wide(&vx, &vy, AXIS_DEADZONE);
+
+            rccar_wheel_speeds_t wheels;
+            rccar_drive_mix(vx, vy, 0, &wheels);
+            log_drive_mix(vx, vy, 0, &wheels);
+            rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+            maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
+                               wheels.rl != 0 || wheels.rr != 0, now_ms);
+            rccar_motor_turret_set(0);
         } else {
         int32_t ax = clamp_axis(evt.axis_x);
         int32_t ay = clamp_axis(evt.axis_y);
@@ -945,6 +966,7 @@ static void my_platform_on_controller_data(uni_hid_device_t *d, uni_controller_t
             evt.axis_y = bb_y;
             evt.axis_rx = bb_x;
             evt.axis_ry = 0;
+            evt.balance_board = true;
             break;
         }
         default:
