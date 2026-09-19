@@ -1,6 +1,6 @@
 /**
  * @file rccar_neopixel.c
- * @brief WS2812 네오픽셀 8개. 엔진 idle 떨림, 가습기 미스트(주황 유지 후 흰)
+ * @brief WS2812 네오픽셀 8개. 엔진 idle 떨림, 가습기 미스트(빨강-주황)
  */
 #include "rccar_neopixel.h"
 #include "rccar_pins.h"
@@ -20,13 +20,14 @@ static const char *TAG = "rccar_neopixel";
 #define RMT_RESOLUTION_HZ 10000000
 #define NEOPIXEL_COUNT    8
 #define ENGINE_FRAME_MS   45
-#define MIST_HOLD_MS      1600
-#define MIST_RAMP_MS      400
 
-/* 옅은 주황 (엔진과 동일한 G/B/R 패킹에 넣을 RGB) */
+/* 가습기 미스트: 픽셀마다 빨강과 주황 사이를 섞고 밝기도 떨린다. */
+#define MIST_RED_R        255
+#define MIST_RED_G        12
+#define MIST_RED_B        0
 #define MIST_ORANGE_R     255
-#define MIST_ORANGE_G     176
-#define MIST_ORANGE_B     88
+#define MIST_ORANGE_G     120
+#define MIST_ORANGE_B     8
 
 static rmt_channel_handle_t s_rmt = NULL;
 static rmt_encoder_handle_t s_encoder = NULL;
@@ -35,7 +36,6 @@ static SemaphoreHandle_t s_lock = NULL;
 static bool s_inited = false;
 static bool s_engine_wanted = false;
 static bool s_mist = false;
-static int64_t s_mist_start_us = 0;
 static uint8_t s_pixels[NEOPIXEL_COUNT * 3];
 
 static esp_err_t flush_pixels(const uint8_t *pixels, size_t len)
@@ -63,10 +63,10 @@ static uint8_t engine_bright(void)
 
 static void pixel_set_rgb(int i, uint8_t r, uint8_t g, uint8_t b)
 {
-    /* 엔진 효과와 동일한 패킹 (G, B, R) */
+    /* WS2812는 GRB 순서다. GBR로 넣으면 빨강이 파랑으로 보인다. */
     s_pixels[i * 3 + 0] = g;
-    s_pixels[i * 3 + 1] = b;
-    s_pixels[i * 3 + 2] = r;
+    s_pixels[i * 3 + 1] = r;
+    s_pixels[i * 3 + 2] = b;
 }
 
 static uint8_t lerp_u8(uint8_t a, uint8_t b, uint32_t num, uint32_t den)
@@ -77,40 +77,34 @@ static uint8_t lerp_u8(uint8_t a, uint8_t b, uint32_t num, uint32_t den)
     return (uint8_t)(((uint32_t)a * (den - num) + (uint32_t)b * num) / den);
 }
 
+static uint8_t scale_bright(uint8_t color, uint8_t bright)
+{
+    uint32_t v = ((uint32_t)color * bright) / 180;
+    if (v > 255) {
+        return 255;
+    }
+    return (uint8_t)v;
+}
+
 static void render_engine_frame(void)
 {
     for (int i = 0; i < NEOPIXEL_COUNT; i++) {
         uint8_t bright = engine_bright();
+        uint8_t r = bright;
         uint8_t g = (uint8_t)((bright * 28) / 100);
-        uint8_t b = bright;
-        uint8_t r = (uint8_t)(esp_random() % 18);
+        uint8_t b = (uint8_t)(esp_random() % 18);
         pixel_set_rgb(i, r, g, b);
     }
 }
 
 static void render_mist_frame(void)
 {
-    int64_t elapsed_ms = (esp_timer_get_time() - s_mist_start_us) / 1000;
-    if (elapsed_ms < 0) {
-        elapsed_ms = 0;
-    }
-    uint32_t t;
-    if (elapsed_ms <= (int64_t)MIST_HOLD_MS) {
-        t = 0;
-    } else {
-        int64_t ramp_elapsed = elapsed_ms - (int64_t)MIST_HOLD_MS;
-        t = (ramp_elapsed >= (int64_t)MIST_RAMP_MS) ? (uint32_t)MIST_RAMP_MS : (uint32_t)ramp_elapsed;
-    }
-
-    uint8_t base_r = lerp_u8(MIST_ORANGE_R, 255, t, MIST_RAMP_MS);
-    uint8_t base_g = lerp_u8(MIST_ORANGE_G, 255, t, MIST_RAMP_MS);
-    uint8_t base_b = lerp_u8(MIST_ORANGE_B, 255, t, MIST_RAMP_MS);
-
     for (int i = 0; i < NEOPIXEL_COUNT; i++) {
-        uint16_t bright = engine_bright();
-        uint8_t r = (uint8_t)((base_r * bright) / 220);
-        uint8_t g = (uint8_t)((base_g * bright) / 220);
-        uint8_t b = (uint8_t)((base_b * bright) / 220);
+        uint32_t mix = esp_random() & 0xff;
+        uint8_t bright = engine_bright();
+        uint8_t r = scale_bright(lerp_u8(MIST_RED_R, MIST_ORANGE_R, mix, 255), bright);
+        uint8_t g = scale_bright(lerp_u8(MIST_RED_G, MIST_ORANGE_G, mix, 255), bright);
+        uint8_t b = scale_bright(lerp_u8(MIST_RED_B, MIST_ORANGE_B, mix, 255), bright);
         pixel_set_rgb(i, r, g, b);
     }
 }
@@ -279,8 +273,7 @@ void rccar_neopixel_mist_set(bool on)
 
     if (on) {
         s_mist = true;
-        s_mist_start_us = esp_timer_get_time();
-        ESP_LOGI(TAG, "mist ON (orange hold %d ms, ramp %d ms)", MIST_HOLD_MS, MIST_RAMP_MS);
+        ESP_LOGI(TAG, "mist ON (red-orange)");
         ensure_anim_locked();
         /* 타이머가 이미 돌고 있으면 첫 프레임을 당장 밀어 준다 */
         render_mist_frame();

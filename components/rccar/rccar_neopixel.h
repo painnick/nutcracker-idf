@@ -24,7 +24,7 @@ void rccar_neopixel_set_enabled(bool enabled);
 bool rccar_neopixel_is_enabled(void);
 
 /**
- * @brief 가습기 ON 시 옅은 주황을 오래 유지한 뒤 흰색으로 전환 + 엔진형 떨림.
+ * @brief 가습기 ON 시 빨강과 주황 사이를 픽셀마다 섞고 밝기를 떨린다.
  * OFF 시 미스트를 끝내고 엔진 효과 설정으로 복귀한다.
  */
 void rccar_neopixel_mist_set(bool on);

@@ -142,7 +142,7 @@ DFPlayer는 `uni_init()` 밖(`on_init_complete`)에서 따로 초기화한다.
 | 우 스틱 X/Y | 차체 정면 유지 평행이동 |
 | D-Pad 좌/우 | 포탑 (속도 384, 최대의 75%) |
 | X | 럼블 500ms + 가습기 2초 ON (0005.mp3) |
-| 1초 이상 정지 후 출발 | 가습기 + 네오픽셀 1초 ON |
+| 1초 이상 정지 후 출발 | 가습기 + 네오픽셀 빨강-주황 1초 ON |
 | Y | 레이더 ON/OFF (기본 OFF). ON 때 PWM 연결 |
 | A | 개틀링 (0003.mp3 + LED 점멸) |
 | B | 레이저 (LED 즉시 1.2초, 0.2초 뒤 0002.mp3) |
@@ -181,7 +181,7 @@ DFPlayer는 `uni_init()` 밖(`on_init_complete`)에서 따로 초기화한다.
 | `rccar_drive` | 스틱 값 → 4휠 속도, 대각선 스냅, idle→move |
 | `rccar_radar` | LEDC 위치형 서보 attach/detach, 왕복 태스크 |
 | `rccar_humidifier` | GPIO4, 펄스 ON |
-| `rccar_neopixel` | WS2812 엔진/미스트 |
+| `rccar_neopixel` | WS2812 엔진 떨림, 가습기 ON 때 빨강-주황 |
 | `rccar_laser` | GPIO15 레이저, GPIO12 개틀링 |
 | `rccar_headlight` | GPIO14 토글 |
 | `rccar_dfplayer` | UART TX, IDLE 루프/효과음 재개 타이머 |
