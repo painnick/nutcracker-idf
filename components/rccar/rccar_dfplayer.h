@@ -5,6 +5,7 @@
 #ifndef RCCAR_DFPLAYER_H
 #define RCCAR_DFPLAYER_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -32,6 +33,7 @@ esp_err_t rccar_dfplayer_play_loop(uint8_t track);
 /**
  * TX 전용이라 트랙 종료(0x3D)를 받지 못한다.
  * 짧은 효과음만 이 시간(ms) 뒤에 IDLE 루프로 돌아간다. 0이면 재개하지 않는다.
+ * 기기가 연결된 동안(`rccar_dfplayer_set_waiting_idle(false)`)은 재개하지 않는다.
  */
 static inline uint32_t rccar_dfplayer_resume_idle_ms(uint8_t track)
 {
@@ -54,6 +56,9 @@ esp_err_t rccar_dfplayer_set_volume(uint8_t vol);
 
 /** 재생 중지 */
 esp_err_t rccar_dfplayer_stop(void);
+
+/** 대기음(0001) 자동 재개 허용. 기기 연결 중에는 false. */
+void rccar_dfplayer_set_waiting_idle(bool enabled);
 
 #ifdef __cplusplus
 }

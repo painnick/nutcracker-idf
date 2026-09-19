@@ -53,6 +53,7 @@ typedef struct {
 } dfplayer_stack_t;
 
 static bool s_inited = false;
+static bool s_waiting_idle = true;
 static esp_timer_handle_t s_resume_idle_timer = NULL;
 
 /**
@@ -118,6 +119,9 @@ static void cancel_resume_idle(void)
 static void resume_idle_cb(void *arg)
 {
     (void)arg;
+    if (!s_waiting_idle) {
+        return;
+    }
     rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
 }
 
@@ -125,7 +129,7 @@ static void schedule_resume_idle(uint8_t track)
 {
     uint32_t ms = rccar_dfplayer_resume_idle_ms(track);
     cancel_resume_idle();
-    if (ms == 0 || s_resume_idle_timer == NULL) {
+    if (!s_waiting_idle || ms == 0 || s_resume_idle_timer == NULL) {
         return;
     }
     esp_timer_start_once(s_resume_idle_timer, (uint64_t)ms * 1000ULL);
@@ -218,4 +222,12 @@ esp_err_t rccar_dfplayer_stop(void)
 {
     cancel_resume_idle();
     return dfplayer_send_cmd(DFPLAYER_CMD_STOP, 0x00, 0x00);
+}
+
+void rccar_dfplayer_set_waiting_idle(bool enabled)
+{
+    s_waiting_idle = enabled;
+    if (!enabled) {
+        cancel_resume_idle();
+    }
 }

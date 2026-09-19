@@ -250,6 +250,9 @@ static void rumble_on_btstack_thread(void *context) {
 
 static void waiting_idle_cb(void *arg) {
     (void)arg;
+    if (s_connected) {
+        return;
+    }
     rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
 }
 
@@ -992,6 +995,7 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     if (input_queue != NULL)
         xQueueReset(input_queue);
     connected_idle_bgm_reset();
+    rccar_dfplayer_set_waiting_idle(true);
     rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
     esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
 
@@ -1029,18 +1033,19 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     ins->ready = true;
     s_ready_count++;
 
+    rccar_dfplayer_set_waiting_idle(false);
+    esp_timer_stop(waiting_idle_timer);
+    esp_timer_stop(connect_sound_timer);
+    if (connect_sound_play_timer != NULL) {
+        esp_timer_stop(connect_sound_play_timer);
+    }
+    esp_timer_start_once(connect_sound_timer, 100 * 1000);
+
     if (first) {
         /* Ensure motors stopped before accepting input */
         rccar_motor_all_stop();
         if (input_queue != NULL)
             xQueueReset(input_queue);
-
-        esp_timer_stop(waiting_idle_timer);
-        esp_timer_stop(connect_sound_timer);
-        if (connect_sound_play_timer != NULL) {
-            esp_timer_stop(connect_sound_play_timer);
-        }
-        esp_timer_start_once(connect_sound_timer, 100 * 1000);
     }
 
     /* 럼블/LED는 trigger_event_on_gamepad 한 번으로 끝낸다. DS4는 calibration/fw
