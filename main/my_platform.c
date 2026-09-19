@@ -93,7 +93,8 @@ static const char *DRIVE_LOG_TAG = "drive_dbg";
    점유해서, 컨트롤러가 스스로 재연결하려는 순간에 켜면 그 절차를 방해한다.
    Xbox Wireless 계열은 링크가 살아 있어도 새 연결을 여는 특성이 있다. */
 #define SCAN_RESTART_DELAY_MS 2000
-#define CONNECTED_IDLE_BGM_US (30 * 1000 * 1000)
+#define CONNECTED_IDLE_BGM_FIRST_US (30 * 1000 * 1000)
+#define CONNECTED_IDLE_BGM_REPEAT_US (60 * 1000 * 1000)
 
 typedef struct my_platform_instance_s {
     uni_gamepad_seat_t gamepad_seat;
@@ -263,7 +264,7 @@ static void connected_idle_bgm_reset(void)
     }
     esp_timer_stop(connected_idle_bgm_timer);
     if (s_connected) {
-        esp_timer_start_periodic(connected_idle_bgm_timer, CONNECTED_IDLE_BGM_US);
+        esp_timer_start_once(connected_idle_bgm_timer, CONNECTED_IDLE_BGM_FIRST_US);
     }
 }
 
@@ -282,6 +283,7 @@ static void connected_idle_bgm_cb(void *arg)
     }
     last_track = track;
     rccar_dfplayer_play(track);
+    esp_timer_start_once(connected_idle_bgm_timer, CONNECTED_IDLE_BGM_REPEAT_US);
 }
 
 static bool evt_has_control_activity(const input_event_t *evt)
