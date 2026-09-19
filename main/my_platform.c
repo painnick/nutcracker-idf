@@ -82,10 +82,10 @@ static const char *DRIVE_LOG_TAG = "drive_dbg";
 /* DS4 calibration/fw feature report 교환 후에 출력 리포트를 보낸다. */
 #define GAMEPAD_EFFECT_DELAY_MS 500
 #define GAMEPAD_KEEPALIVE_MS 4000
-/* Balance Board: CoG 민감도 (grams). 값을 낮출수록 적은 체중 이동에도 반응한다. */
-#define BB_MOVE_THRESHOLD 800
-#define BB_MOVE_THRESHOLD_DIAG 500
-#define BB_COG_SCALE_RANGE 2200
+/* Balance Board: CoG 문턱/스케일 (grams). 문턱을 높이거나 스케일을 키우면 덜 민감하다. */
+#define BB_MOVE_THRESHOLD 1400
+#define BB_MOVE_THRESHOLD_DIAG 900
+#define BB_COG_SCALE_RANGE 3400
 #define BB_SMOOTH_NUM 12
 #define BB_SMOOTH_DEN 100
 
