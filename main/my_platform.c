@@ -501,6 +501,38 @@ static void apply_balance_board_drive(int32_t axis_y, int32_t axis_rx, int64_t n
                        wheels.rl != 0 || wheels.rr != 0, now_ms);
 }
 
+static void apply_gamepad_drive(const input_event_t *gp, int64_t now_ms)
+{
+    int32_t ax = clamp_axis(gp->axis_x);
+    int32_t ay = clamp_axis(gp->axis_y);
+    int32_t arx = clamp_axis(gp->axis_rx);
+    int32_t ary = clamp_axis(gp->axis_ry);
+
+    int32_t vx = STICK_VX_SIGN * rccar_drive_apply_deadzone(ay, AXIS_DEADZONE);
+    int32_t w = STICK_W_SIGN * rccar_drive_apply_deadzone(ax, AXIS_DEADZONE);
+
+    int32_t r_vx = STICK_RY_VX_SIGN * ary;
+    int32_t r_vy = STICK_VY_SIGN * arx;
+    rccar_drive_snap_diagonal(&r_vx, &r_vy, AXIS_DEADZONE);
+    vx += r_vx;
+    int32_t vy = r_vy;
+
+    rccar_wheel_speeds_t wheels;
+    rccar_drive_mix(vx, vy, w, &wheels);
+    log_drive_mix(vx, vy, w, &wheels);
+    rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
+    maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
+                       wheels.rl != 0 || wheels.rr != 0, now_ms);
+}
+
+static bool bb_axes_are_stopped(int32_t axis_y, int32_t axis_rx)
+{
+    int32_t vx = STICK_VX_SIGN * clamp_axis(axis_y);
+    int32_t vy = STICK_VY_SIGN * clamp_axis(axis_rx);
+    rccar_drive_snap_diagonal_wide(&vx, &vy, AXIS_DEADZONE);
+    return vx == 0 && vy == 0;
+}
+
 static void failsafe_stop(void) {
     maybe_idle_exhaust(false, esp_timer_get_time() / 1000);
     rccar_motor_wheel_test_stop();
@@ -651,37 +683,18 @@ static void input_process_task(void *arg) {
         if (rccar_motor_wheel_test_is_running()) {
             rccar_radar_set_moving(true);
         } else if (s_bb_ready) {
-            /* 패드 스틱이 들어와도 주행은 보드 스냅샷만 사용한다.
+            /* 보드가 움직이면 보드만. 정지면 패드 스틱을 쓴다.
                보드 리포트가 끊기면 스틱으로 대체하지 않고 휠만 멈춘다. */
             if (s_bb_last_ms == 0 || (now_ms - s_bb_last_ms) > FAILSAFE_MS) {
                 rccar_motor_wheel_set(0, 0, 0, 0);
                 maybe_idle_exhaust(false, now_ms);
+            } else if (bb_axes_are_stopped(s_bb_axis_y, s_bb_axis_rx) && pad_live) {
+                apply_gamepad_drive(&pad, now_ms);
             } else {
                 apply_balance_board_drive(s_bb_axis_y, s_bb_axis_rx, now_ms);
             }
         } else if (!evt.balance_board) {
-        int32_t ax = clamp_axis(evt.axis_x);
-        int32_t ay = clamp_axis(evt.axis_y);
-        int32_t arx = clamp_axis(evt.axis_rx);
-        int32_t ary = clamp_axis(evt.axis_ry);
-
-        /* Left stick: car-like drive (forward/back + yaw) */
-        int32_t vx = STICK_VX_SIGN * rccar_drive_apply_deadzone(ay, AXIS_DEADZONE);
-        int32_t w = STICK_W_SIGN * rccar_drive_apply_deadzone(ax, AXIS_DEADZONE);
-
-        /* Right stick: body-frame translation, no yaw. 대각선 구간은 45°로 맞춘다. */
-        int32_t r_vx = STICK_RY_VX_SIGN * ary;
-        int32_t r_vy = STICK_VY_SIGN * arx;
-        rccar_drive_snap_diagonal(&r_vx, &r_vy, AXIS_DEADZONE);
-        vx += r_vx;
-        int32_t vy = r_vy;
-
-        rccar_wheel_speeds_t wheels;
-        rccar_drive_mix(vx, vy, w, &wheels);
-        log_drive_mix(vx, vy, w, &wheels);
-        rccar_motor_wheel_set(wheels.fl, wheels.fr, wheels.rl, wheels.rr);
-        maybe_idle_exhaust(wheels.fl != 0 || wheels.fr != 0 ||
-                           wheels.rl != 0 || wheels.rr != 0, now_ms);
+        apply_gamepad_drive(&evt, now_ms);
         } else {
             rccar_motor_wheel_set(0, 0, 0, 0);
             maybe_idle_exhaust(false, now_ms);
