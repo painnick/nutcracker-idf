@@ -1,0 +1,20 @@
+menu "허용 게임패드"
+
+    config NUTCRACKER_ALLOWED_MAC_1
+        string "게임패드 MAC 1"
+        default "00:23:31:95:55:D7"
+        help
+            연결을 허용할 블루투스 주소. 예: AA:BB:CC:DD:EE:FF
+            구분자는 콜론, 하이픈, 공백을 쓸 수 있다.
+            비우면 이 칸은 무시한다.
+            두 칸이 모두 비어 있으면 모든 게임패드를 허용한다.
+            하나 이상 있으면 그 주소만 연결되고, 부팅 때마다 NVS에 다시 저장된다.
+            Wii Balance Board를 쓰려면 보드 주소도 한 칸에 넣어야 한다.
+
+    config NUTCRACKER_ALLOWED_MAC_2
+        string "게임패드 MAC 2"
+        default "41:42:E8:C7:90:32"
+        help
+            형식은 게임패드 MAC 1과 같다. 비우면 무시한다.
+
+endmenu

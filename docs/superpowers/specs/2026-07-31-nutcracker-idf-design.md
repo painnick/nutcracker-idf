@@ -1,7 +1,7 @@
 # nutcracker-idf 설계 문서
 
 날짜: 2026-07-31  
-갱신: 2026-09-19  
+갱신: 2026-10-09  
 상태: 현행 펌웨어와 일치 (`rccar_pins.h`, `README.md`)  
 기반: panzer4-idf (ESP-IDF + Bluepad32)
 
@@ -115,6 +115,7 @@ DFPlayer는 `uni_init()` 밖(`on_init_complete`)에서 따로 초기화한다.
 - `my_platform_on_controller_data` (Core 0, btstack)가 샘플을 큐에 넣음
 - Core 1의 `input_process_task`가 주행, 포탑, 버튼, 페일세이프 적용
 - Core1에서 btstack/Bluepad32 API(`d->report_parser.*` 포함)를 직접 호출하지 않음. 럼블은 `btstack_run_loop_execute_on_main_thread()`로 위임
+- 허용 MAC은 `main/Kconfig.projbuild` 2칸이다. 기본값은 `00:23:31:95:55:D7`, `41:42:E8:C7:90:32`. `on_init_complete`에서 Bluepad32 allowlist로 옮기고 NVS 네임스페이스 `bp32` 키 `bp.bt.allowlist`, `bp.bt.allow_en`에 저장한다. 칸이 모두 비면 allowlist를 끄고 아무 패드나 받는다. 하나라도 있으면 조회와 수신 연결 모두 그 주소만 받는다. Wii Balance Board도 같은 목록을 탄다.
 
 ### 4.2 홀로노믹 믹스
 

@@ -9,8 +9,12 @@
 #include <string.h>
 
 #include <btstack_run_loop.h>
+#include <btstack_util.h>
 #include <platform/uni_platform.h>
 #include <uni.h>
+#include "bt/uni_bt_allowlist.h"
+#include "sdkconfig.h"
+#include "uni_property.h"
 #include "controller/uni_balance_board.h"
 #include "controller/uni_controller.h"
 #include "controller/uni_controller_type.h"
@@ -903,8 +907,55 @@ static void my_platform_init(int argc, const char **argv) {
     esp_timer_create(&laser_rumble_args, &laser_rumble_timer);
 }
 
+/* Kconfig에 적힌 주소를 Bluepad32 allowlist에 넣고 NVS(bp32)에 저장한다.
+   uni_bt_allowlist_init()보다 먼저 호출되므로, 켜기/끄기는 NVS에 항상 기록한다.
+   set_enabled(false)는 아직 로드 전인 RAM 기본값과 같으면 NVS를 쓰지 않는다. */
+static void sync_allowed_gamepads_from_kconfig(void) {
+    static const char *slots[] = {
+        CONFIG_NUTCRACKER_ALLOWED_MAC_1,
+        CONFIG_NUTCRACKER_ALLOWED_MAC_2,
+    };
+    static const bd_addr_t zero_addr = {0, 0, 0, 0, 0, 0};
+    int added = 0;
+
+    uni_bt_allowlist_remove_all();
+
+    for (size_t i = 0; i < ARRAY_SIZE(slots); i++) {
+        const char *s = slots[i];
+        bd_addr_t addr;
+
+        while (*s == ' ' || *s == '\t') {
+            s++;
+        }
+        if (*s == '\0') {
+            continue;
+        }
+        if (!sscanf_bd_addr(s, addr) || bd_addr_cmp(addr, zero_addr) == 0) {
+            loge("custom: invalid gamepad MAC slot %u: '%s'\n", (unsigned)(i + 1), slots[i]);
+            continue;
+        }
+        if (!uni_bt_allowlist_add_addr(addr)) {
+            loge("custom: gamepad allowlist full, drop %s\n", bd_addr_to_str(addr));
+            continue;
+        }
+        added++;
+        logi("custom: allow gamepad %s\n", bd_addr_to_str(addr));
+    }
+
+    uni_property_value_t enabled = {.u8 = (uint8_t)(added > 0)};
+    uni_property_set(UNI_PROPERTY_IDX_ALLOWLIST_ENABLED, enabled);
+    uni_bt_allowlist_set_enabled(added > 0);
+
+    if (added > 0) {
+        logi("custom: gamepad allowlist enabled (%d), stored in NVS\n", added);
+    } else {
+        logi("custom: gamepad allowlist empty, any controller may connect\n");
+    }
+}
+
 static void my_platform_on_init_complete(void) {
     logi("custom: on_init_complete()\n");
+    sync_allowed_gamepads_from_kconfig();
     uni_bt_start_scanning_and_autoconnect_unsafe();
     uni_bt_allow_incoming_connections(true);
 
