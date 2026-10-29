@@ -20,6 +20,9 @@ void rccar_radar_set_moving(bool moving);
 
 /** @brief 레이더 왕복 기능. 기본은 OFF. ON이면 PWM을 붙이고, OFF면 뗀다. */
 void rccar_radar_set_enabled(bool enabled);
+
+/** @brief 전시 슬롯. 정지 5초 대기를 건너뛰고 바로 왕복을 시작한다. */
+void rccar_radar_exhibit_begin(void);
 void rccar_radar_toggle(void);
 bool rccar_radar_is_enabled(void);
 

@@ -31,21 +31,32 @@ esp_err_t rccar_dfplayer_play(uint8_t track);
 esp_err_t rccar_dfplayer_play_loop(uint8_t track);
 
 /**
- * TX 전용이라 트랙 종료(0x3D)를 받지 못한다.
- * 짧은 효과음만 이 시간(ms) 뒤에 IDLE 루프로 돌아간다. 0이면 재개하지 않는다.
+ * sdcard/mp3 프레임을 읽어 얻은 재생 길이(ms).
+ * 0002 Cannon 1907, 0003 Gatling 684, 0004 Tank Gear Shift 1097, 0005 Boost 2064.
+ * 0006 War Horn And Drums 18155, 0007 War Drum Loop 7080,
+ * 0008 Radio Communication 37512, 0009 War Horn 33960.
+ * TX 전용이라 곡 끝(0x3D)은 받지 못한다. 0이면 재개하지 않는다.
  * 기기가 연결된 동안(`rccar_dfplayer_set_waiting_idle(false)`)은 재개하지 않는다.
  */
 static inline uint32_t rccar_dfplayer_resume_idle_ms(uint8_t track)
 {
     switch (track) {
     case RCCAR_DFPLAYER_TRACK_GUN:
-        return 2500;
+        return 1907;
     case RCCAR_DFPLAYER_TRACK_MG:
-        return 1500;
+        return 684;
     case RCCAR_DFPLAYER_TRACK_CONNECT:
-        return 4000;
+        return 1097;
     case RCCAR_DFPLAYER_TRACK_NITRO:
-        return 3000;
+        return 2064;
+    case RCCAR_DFPLAYER_TRACK_BGM_MIN:
+        return 18155;
+    case RCCAR_DFPLAYER_TRACK_BGM_MIN + 1:
+        return 7080;
+    case RCCAR_DFPLAYER_TRACK_BGM_MIN + 2:
+        return 37512;
+    case RCCAR_DFPLAYER_TRACK_BGM_MAX:
+        return 33960;
     default:
         return 0;
     }

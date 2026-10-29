@@ -30,6 +30,7 @@
 
 #include "rccar.h"
 #include "rccar_dfplayer.h"
+#include "rccar_exhibit.h"
 #include "rccar_drive.h"
 #include "rccar_headlight.h"
 #include "rccar_humidifier.h"
@@ -583,6 +584,11 @@ static void log_drive_mix(int32_t vx, int32_t vy, int32_t w, const rccar_wheel_s
              (long)wheels->fl, (long)wheels->fr, (long)wheels->rl, (long)wheels->rr);
 }
 
+static bool exhibit_is_connected(void)
+{
+    return s_connected;
+}
+
 static void input_process_task(void *arg) {
     (void)arg;
 
@@ -600,6 +606,7 @@ static void input_process_task(void *arg) {
     static uint8_t prev_misc_buttons = 0;
     static int64_t last_input_ms = 0;
     static bool failsafe_active = true;
+    static bool exhibit_running = false;
 
     input_event_t evt;
 
@@ -607,7 +614,7 @@ static void input_process_task(void *arg) {
         BaseType_t got = xQueueReceive(input_queue, &evt, pdMS_TO_TICKS(INPUT_POLL_MS));
         int64_t now_ms = esp_timer_get_time() / 1000;
 
-        /* Disconnect / not ready: never re-drive from stale queue samples */
+        /* 미연결 전시는 이 태스크만 출력한다. 페일세이프를 매 틱 호출하면 연출이 꺼진다. */
         if (!s_connected) {
             last_input_ms = 0;
             prev_buttons = 0;
@@ -616,11 +623,20 @@ static void input_process_task(void *arg) {
             select_start_fired = false;
             wheel_test_pressed_at = 0;
             wheel_test_fired = false;
-            if (!failsafe_active) {
-                failsafe_stop();
-                failsafe_active = true;
+            failsafe_active = true;
+            if (!exhibit_running) {
+                rccar_exhibit_begin(now_ms);
+                exhibit_running = true;
             }
-            continue;
+            rccar_exhibit_tick(now_ms, exhibit_is_connected);
+            if (!s_connected) {
+                continue;
+            }
+        }
+
+        if (exhibit_running) {
+            rccar_exhibit_abort();
+            exhibit_running = false;
         }
 
         if (got == pdTRUE) {
@@ -971,8 +987,8 @@ static void my_platform_on_init_complete(void) {
     rccar_dfplayer_set_volume(vol);
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
-    esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
+    /* 미연결 전시는 0001 루프를 쓰지 않는다. 한 바퀴 끝 0006~0009는 exhibit tick 이 낸다. */
+    rccar_dfplayer_set_waiting_idle(false);
 }
 
 static uni_error_t my_platform_on_device_discovered(bd_addr_t addr, const char *name, uint16_t cod, uint8_t rssi) {
@@ -1061,9 +1077,8 @@ static void my_platform_on_device_disconnected(uni_hid_device_t *d) {
     if (input_queue != NULL)
         xQueueReset(input_queue);
     connected_idle_bgm_reset();
-    rccar_dfplayer_set_waiting_idle(true);
-    rccar_dfplayer_play_loop(RCCAR_DFPLAYER_TRACK_IDLE);
-    esp_timer_start_periodic(waiting_idle_timer, 30 * 1000 * 1000);
+    rccar_dfplayer_set_waiting_idle(false);
+    esp_timer_stop(waiting_idle_timer);
 
     /* 스캔은 바로 켜지 않는다. 컨트롤러가 스스로 재연결하는 구간에 inquiry가
        겹치면 그 절차를 방해한다. 유예 후에도 연결이 없으면 그때 켠다. */
@@ -1107,6 +1122,9 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     }
     esp_timer_start_once(connect_sound_timer, 100 * 1000);
 
+    /* 전시 tick 이 모터를 멈추기 전에 연결을 보게 한다. */
+    s_connected = true;
+
     if (first) {
         /* Ensure motors stopped before accepting input */
         rccar_motor_all_stop();
@@ -1125,7 +1143,6 @@ static uni_error_t my_platform_on_device_ready(uni_hid_device_t *d) {
     if (!is_bb)
         gamepad_keepalive_start(d);
 
-    s_connected = true;
     connected_idle_bgm_reset();
     maybe_schedule_scan();
     return UNI_ERROR_SUCCESS;

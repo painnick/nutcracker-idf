@@ -271,6 +271,20 @@ void rccar_radar_set_moving(bool moving)
     }
 }
 
+void rccar_radar_exhibit_begin(void)
+{
+    if (!s_inited) {
+        return;
+    }
+    s_need_start_delay = false;
+    if (s_enabled) {
+        ESP_LOGI(TAG, "exhibit on (already enabled)");
+        return;
+    }
+    s_enabled = true;
+    ESP_LOGI(TAG, "exhibit on");
+}
+
 void rccar_radar_set_enabled(bool enabled)
 {
     if (!s_inited) {

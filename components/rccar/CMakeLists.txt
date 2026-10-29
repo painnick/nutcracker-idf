@@ -8,6 +8,7 @@ set(srcs
     rccar_laser.c
     rccar_headlight.c
     rccar_radar.c
+    rccar_exhibit.c
     rccar_dfplayer.c
     rccar_storage.c
 )
